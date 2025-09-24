@@ -1,7 +1,7 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "types": ["react", "react-dom", "chrome"],
+    "types": ["react", "react-dom", "chrome", "node"],
     "baseUrl": ".",
     "paths": {
       "react-window": ["types/react-window.d.ts"],

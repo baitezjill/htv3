@@ -13,6 +13,47 @@ import api from './services/extension-api';
 import persistenceService from './services/persistence';
 import { useDelegatedScroll } from './hooks/useDelegatedScroll';
 
+// Hoisted helper: Build the Ensembler prompt using provided fixed template from spec
+function buildEnsemblerPrompt(userPrompt: string, modelOutputs: Record<string, string>): string {
+  const modelOutputsBlock = Object.entries(modelOutputs)
+    .filter(([_, text]) => text && text.trim())
+    .map(([providerId, text]) => `=== ${providerId.toUpperCase()} ===\n${text}`)
+    .join('\n\n');
+
+  const tpl = `You are not a synthesizer. You are a mirror that reveals what others cannot see.
+Task: Present ALL insights from the models below in their most useful form for decision-making on "(user's Prompt)".
+Critical instruction: Do NOT synthesize into a single answer. Instead, reason internally via this structure—then output ONLY as seamless, narrative prose that implicitly embeds it all:
+Map the landscape — Group similar ideas, preserving tensions and contradictions.
+Surface the invisible — Highlight consensus (2+ models), unique sightings (one model) as natural flow.
+Frame the choices — present alternatives as "If you prioritize X, this path fits because Y."
+Flag the unknowns — Note disagreements/uncertainties as subtle cautions.
+Internal format for reasoning (NEVER output directly):
+What Everyone Sees (consensus)
+Point 1
+Point 2
+The Tensions (disagreements)
+Option A: [suggestion X] implies...
+Option B: [suggestion Y] posits...
+The Unique Insights
+[suggestion]: Overlooked angle...
+The Choice Framework
+If priority [goal 1]: lean toward [option]
+If priority [goal 2]: lean toward [option]
+Confidence Check
+- High confidence: [what's solid]
+- Check this: [what needs verification]
+- Unknown: [what's missing]
+
+
+finally output your response as a narrative explaining everything implicitly to the user, like a natural response to the users prompt fluid, insightful, redacting model names/extraneous details. Build feedback as emergent wisdom—evoke clarity, agency, and subtle awe. Weave your final narrative as representation of a cohesive response of the collective thought  to the users prompt:
+
+User Prompt: ${userPrompt}
+
+Model outputs to analyze:
+${modelOutputsBlock}`;
+  return tpl;
+}
+
 const App = () => {
   // Single source of truth: all messages in one array
   const [messages, setMessages] = useState<TurnMessage[]>([]);
@@ -755,9 +796,9 @@ const App = () => {
   // update the outerScrollRef to point at it for consistent behavior
   useEffect(() => {
     const list = listRef.current as any;
-    const el: HTMLElement | null = list && (list._outerRef as HTMLElement | null);
+    const el: HTMLDivElement | null = list && (list._outerRef as HTMLDivElement | null);
     if (!el) return;
-    outerScrollRef.current = el;
+    outerScrollRef.current = el as HTMLDivElement;
     // Initialize stickiness based on current position
     scrollBottomRef.current = isNearBottom();
     el.addEventListener('scroll', handleOuterScroll, { passive: true });
@@ -766,8 +807,8 @@ const App = () => {
     };
   }, [handleOuterScroll, isNearBottom, listRef]);
 
-  // Port message handler - streams directly into messages array
-  const createPortMessageHandler = useCallback(() => {
+  // Port message handler - streams directly into messages array (hoisted-friendly declaration)
+  function createPortMessageHandler() {
     return (message: any) => {
       if (!message) return;
 
@@ -903,7 +944,7 @@ const App = () => {
         return;
       }
     };
-  }, [updateLastAiTurn, lastSynthesisModel]);
+  }
 
   // Push user turn -> push empty AI turn -> stream into AI turn
   const handleSendPrompt = useCallback(async (prompt: string) => {
