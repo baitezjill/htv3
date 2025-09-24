@@ -1,7 +1,6 @@
 import { AiTurn, ProviderResponse, AppStep } from '../types';
 import { BotIcon } from './Icons';
 import ProviderResponseBlock from './ProviderResponseBlock';
-import TurnActionBar from './TurnActionBar';
 import { useState, useEffect } from 'react';
 import api from '../services/extension-api';
 import ReactMarkdown from 'react-markdown';
@@ -13,14 +12,9 @@ interface AiTurnBlockProps {
   isLive?: boolean;
   isReducedMotion?: boolean;
   currentAppStep?: AppStep;
-  onSynthesize?: (provider: string) => void;
-  // Ensemble additions for TurnActionBar and badge/panel
-  selectedSynthModelIds?: string[];
-  onStartEnsemble?: () => void;
-  ensembleActive?: boolean;
 }
 
-const AiTurnBlock = ({ aiTurn, isLive = false, isReducedMotion = false, currentAppStep, onSynthesize, selectedSynthModelIds = [], onStartEnsemble, ensembleActive = false }: AiTurnBlockProps) => {
+const AiTurnBlock = ({ aiTurn, isLive = false, isReducedMotion = false, currentAppStep }: AiTurnBlockProps) => {
   const [showPerspectives, setShowPerspectives] = useState(false);
   const [hiddenTurns, setHiddenTurns] = useState<AiTurn[]>([]);
 
@@ -132,7 +126,11 @@ const AiTurnBlock = ({ aiTurn, isLive = false, isReducedMotion = false, currentA
               color: aiTurn.isEnsembleAnswer ? '#10b981' : '#8b5cf6',
             }}
           >
-            {aiTurn.isEnsembleAnswer ? 'Ensemble Answer — Cross-validated' : 'AI Response'} {isLive && '(Live)'}
+            {aiTurn.isEnsembleAnswer
+              ? 'Ensemble Answer — Cross-validated'
+              : aiTurn.isSynthesisAnswer
+                ? 'Synthesis'
+                : 'AI Response'} {isLive && '(Live)'}
           </div>
           <div
             style={{
@@ -164,17 +162,7 @@ const AiTurnBlock = ({ aiTurn, isLive = false, isReducedMotion = false, currentA
         />
       )}
 
-      {/* TurnActionBar - Show when awaiting synthesis */}
-      {currentAppStep === 'awaitingSynthesis' && onSynthesize && (
-        <TurnActionBar
-          currentAppStep={currentAppStep}
-          onSynthesize={onSynthesize}
-          availableProviders={Object.keys(aiTurn.providerResponses)}
-          selectedSynthModelIds={selectedSynthModelIds}
-          onStartEnsemble={onStartEnsemble}
-          ensembleActive={ensembleActive}
-        />
-      )}
+      {/* Round-level action bar is rendered under UserTurnBlock now */}
 
       {/* Synthesis Response - Only show inside turn when finalized, to avoid duplication with sticky overlay */}
       {aiTurn.synthesisResponse && (

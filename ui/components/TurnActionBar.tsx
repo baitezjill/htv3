@@ -1,43 +1,79 @@
-import { AppStep } from '../types';
 import { LLM_PROVIDERS_CONFIG } from '../constants';
 
 interface TurnActionBarProps {
-  currentAppStep: AppStep;
-  onSynthesize: (providerId: string) => void;
-  availableProviders: string[]; // provider ids that have responses to synthesize from
   isLoading?: boolean;
-  // Ensemble additions
-  selectedSynthModelIds?: string[]; // models selected in ModelTray to act as synthesizers
-  onStartEnsemble?: () => void; // when user clicks Ensemble button from TurnActionBar
-  ensembleActive?: boolean;
+
+  // Round identity
+  roundUserTurnId: string;
+
+  // Synthesis (multi-select)
+  synthSelected: Record<string, boolean>;
+  onToggleSynth: (roundUserTurnId: string, providerId: string) => void;
+  onRunSynthesis: (roundUserTurnId: string) => void;
+
+  // Ensemble (single-select)
+  ensembleSelected: string | null;
+  onSelectEnsemble: (roundUserTurnId: string, providerId: string) => void;
+  onRunEnsemble: (roundUserTurnId: string) => void;
+
+  // Per-provider grey-out
+  eligibleMap?: Record<string, { disabled: boolean; reason?: string }>;
+
+  // Optional guards
+  disableSynthesisRun?: boolean;
+  disableEnsembleRun?: boolean;
 }
 
-const TurnActionBar = ({ currentAppStep, onSynthesize, availableProviders, isLoading = false, selectedSynthModelIds = [], onStartEnsemble, ensembleActive = false }: TurnActionBarProps) => {
-  // Guard: only render in awaitingSynthesis state and when providers exist
-  if (currentAppStep !== 'awaitingSynthesis' || availableProviders.length === 0) return null;
-
-  // Keep button order aligned with global provider config, but only show available ones
-  const providersToShow = LLM_PROVIDERS_CONFIG.filter(p => availableProviders.includes(p.id));
-
-  // Ensemble button visibility per spec: last AI turn has >=2 providers AND ModelTray has >=2 selected
-  const showEnsemble = availableProviders.length >= 2 && selectedSynthModelIds.length >= 2;
-
-  const formatList = (ids: string[], max = 3) => {
-    const names = ids.map(id => LLM_PROVIDERS_CONFIG.find(p => p.id === id)?.name || id);
-    if (names.length <= max) return names.join(', ');
-    const head = names.slice(0, max).join(', ');
-    return `${head}, +${names.length - max} more`;
-  };
-
-  const tooltip = `Ensemble perspectives from: ${formatList(availableProviders)} — Ensemble with: ${formatList(selectedSynthModelIds)}`;
+const TurnActionBar = ({
+  isLoading = false,
+  roundUserTurnId,
+  synthSelected,
+  onToggleSynth,
+  onRunSynthesis,
+  ensembleSelected,
+  onSelectEnsemble,
+  onRunEnsemble,
+  eligibleMap = {},
+  disableSynthesisRun = false,
+  disableEnsembleRun = false,
+}: TurnActionBarProps) => {
+  const renderToggle = (
+    pid: string,
+    isSelected: boolean,
+    onClick: () => void,
+    isDisabled: boolean,
+    title: string
+  ) => (
+    <button
+      key={pid}
+      onClick={onClick}
+      disabled={isDisabled || isLoading}
+      title={title}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '6px 10px',
+        borderRadius: 999,
+        border: '1px solid #475569',
+        background: isSelected ? '#334155' : '#0f172a',
+        color: isDisabled ? '#64748b' : '#e2e8f0',
+        opacity: isDisabled ? 0.6 : 1,
+        fontSize: 12,
+        cursor: (isDisabled || isLoading) ? 'not-allowed' : 'pointer'
+      }}
+    >
+      {isSelected ? '✓' : '○'} {LLM_PROVIDERS_CONFIG.find(p => p.id === pid)?.name || pid}
+    </button>
+  );
 
   return (
     <div
       className="turn-action-bar"
       style={{
         display: 'flex',
-        alignItems: 'center',
-        gap: '12px',
+        flexDirection: 'column',
+        gap: '10px',
         padding: '12px 14px',
         border: '1px solid #334155',
         background: '#1e293b',
@@ -45,69 +81,64 @@ const TurnActionBar = ({ currentAppStep, onSynthesize, availableProviders, isLoa
         marginTop: '8px',
       }}
     >
-      <span style={{ color: '#94a3b8', fontSize: 12 }}>Synthesize with…</span>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {providersToShow.map(provider => (
-          <button
-            key={provider.id}
-            onClick={() => !isLoading && onSynthesize(provider.id)}
-            disabled={isLoading}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '8px 12px',
-              borderRadius: 8,
-              border: '1px solid #475569',
-              background: isLoading ? '#334155' : '#334155',
-              color: '#e2e8f0',
-              fontSize: 12,
-              cursor: isLoading ? 'not-allowed' : 'pointer',
-              transition: 'background 0.15s ease, transform 0.03s ease',
-            }}
-            onMouseDown={e => {
-              // Micro press feedback
-              (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(1px)';
-            }}
-            onMouseUp={e => {
-              (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(0)';
-            }}
-            title={`Synthesize with ${provider.name}`}
-          >
-            <span style={{ filter: 'grayscale(0.1)', opacity: 0.9 }}>✨</span>
-            <span>{provider.name}</span>
-          </button>
-        ))}
-      </div>
-
-      {/* Spacer */}
-      <div style={{ flex: 1 }} />
-
-      {/* Ensemble Button (TurnActionBar path) */}
-      {showEnsemble && (
+      {/* Synthesize with */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ color: '#94a3b8', fontSize: 12 }}>Synthesize with:</span>
+        {LLM_PROVIDERS_CONFIG.map(p => {
+          const isSelected = !!synthSelected[p.id];
+          const block = eligibleMap[p.id];
+          const isDisabled = !!block?.disabled;
+          const title = block?.reason ? `${p.name}: ${block.reason}` : `Include ${p.name}`;
+          return renderToggle(p.id, isSelected, () => onToggleSynth(roundUserTurnId, p.id), isDisabled, title);
+        })}
+        <div style={{ flex: 1 }} />
         <button
-          onClick={() => onStartEnsemble && !ensembleActive && onStartEnsemble()}
-          disabled={ensembleActive || isLoading}
-          title={tooltip}
+          onClick={() => onRunSynthesis(roundUserTurnId)}
+          disabled={isLoading || disableSynthesisRun}
           style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '8px 12px',
+            padding: '6px 10px',
             borderRadius: 8,
             border: '1px solid #475569',
             background: '#334155',
             color: '#e2e8f0',
             fontSize: 12,
-            cursor: (ensembleActive || isLoading) ? 'not-allowed' : 'pointer',
-            transition: 'background 0.15s ease, transform 0.03s ease',
-            opacity: (ensembleActive || isLoading) ? 0.6 : 1,
+            cursor: (isLoading || disableSynthesisRun) ? 'not-allowed' : 'pointer'
           }}
         >
-          <span style={{ filter: 'grayscale(0.1)', opacity: 0.9 }}>🧩</span>
-          <span>Ensemble</span>
+          ✨ Run
         </button>
-      )}
+      </div>
+
+      {/* Ensemble with (single-select) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ color: '#94a3b8', fontSize: 12 }}>Ensemble with:</span>
+        {LLM_PROVIDERS_CONFIG.map(p => {
+          const isSelected = ensembleSelected === p.id;
+          return renderToggle(
+            p.id,
+            isSelected,
+            () => onSelectEnsemble(roundUserTurnId, p.id),
+            false,
+            `Choose ${p.name} to ensemble`
+          );
+        })}
+        <div style={{ flex: 1 }} />
+        <button
+          onClick={() => onRunEnsemble(roundUserTurnId)}
+          disabled={isLoading || !ensembleSelected || disableEnsembleRun}
+          style={{
+            padding: '6px 10px',
+            borderRadius: 8,
+            border: '1px solid #475569',
+            background: '#334155',
+            color: '#e2e8f0',
+            fontSize: 12,
+            cursor: (isLoading || !ensembleSelected || disableEnsembleRun) ? 'not-allowed' : 'pointer'
+          }}
+        >
+          🧩 Run Ensemble
+        </button>
+      </div>
     </div>
   );
 };

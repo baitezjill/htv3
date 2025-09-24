@@ -45,6 +45,9 @@ const App = () => {
   const [isInitializing, setIsInitializing] = useState(true);
   const [expandedUserTurns, setExpandedUserTurns] = useState<Record<string, boolean>>({});
   const [isReducedMotion, setIsReducedMotion] = useState(false);
+  // Round-level action bar selections
+  const [synthSelectionsByRound, setSynthSelectionsByRound] = useState<Record<string, Record<string, boolean>>>({});
+  const [ensembleSelectionByRound, setEnsembleSelectionByRound] = useState<Record<string, string | null>>({});
 
   // Refs
   const activeAiTurnIdRef = useRef<string | null>(null);
@@ -169,6 +172,345 @@ const App = () => {
       return updated;
     });
   }, [pendingUserTurns, isHistoryPanelOpen]);
+
+  // Targeted update by AI turn id (supports mid-list synthesis streaming)
+  const updateAiTurnById = useCallback((aiTurnId: string, updater: (aiTurn: AiTurn) => AiTurn) => {
+    setMessages(prev => {
+      const idx = prev.findIndex(t => t.type === 'ai' && (t as AiTurn).id === aiTurnId);
+      if (idx === -1) return prev;
+
+      const updated = [...prev];
+      const updatedAiTurn = updater(updated[idx] as AiTurn);
+      updated[idx] = updatedAiTurn;
+
+      const allComplete = Object.values(updatedAiTurn.providerResponses || {}).every(r => 
+        r.status === 'completed' || r.status === 'error'
+      );
+
+      if (allComplete) {
+        setIsLoading(false);
+        setUiPhase('awaiting_action');
+        const isEnsemble = updatedAiTurn.isEnsembleAnswer;
+        const isSynthesis = updatedAiTurn.isSynthesisAnswer;
+        setCurrentAppStep(isEnsemble || isSynthesis ? 'synthesisDone' : 'awaitingSynthesis');
+        setIsContinuationMode(true);
+        activeAiTurnIdRef.current = null;
+      }
+
+      return updated;
+    });
+  }, []);
+
+  // ===== Round helpers: locate round, existing synth/ensemble blocks, and insertion point =====
+  const findRoundForUserTurn = useCallback((userTurnId: string) => {
+    const userIndex = messages.findIndex(m => m.id === userTurnId);
+    if (userIndex === -1) return null;
+    // Find first non-synthesis/non-ensemble AI turn after this user (provider outputs of this round)
+    let aiIndex = -1;
+    for (let i = userIndex + 1; i < messages.length; i++) {
+      const t = messages[i];
+      if (t.type === 'user') break; // next round begins
+      if (t.type === 'ai') {
+        const ai = t as AiTurn;
+        if (!ai.isSynthesisAnswer && !ai.isEnsembleAnswer) {
+          aiIndex = i;
+          break;
+        }
+      }
+    }
+    const ai = aiIndex !== -1 ? (messages[aiIndex] as AiTurn) : undefined;
+    return { userIndex, user: messages[userIndex] as UserTurn, aiIndex, ai };
+  }, [messages]);
+
+  const findExistingSynthesisTurnForRound = useCallback((userTurnId: string): { index: number; turn: AiTurn } | null => {
+    const round = findRoundForUserTurn(userTurnId);
+    if (!round) return null;
+    const { userIndex } = round;
+    for (let i = userIndex + 1; i < messages.length; i++) {
+      const t = messages[i];
+      if (t.type === 'user') break;
+      if (t.type === 'ai') {
+        const ai = t as AiTurn;
+        if (!ai.isSynthesisAnswer && !ai.isEnsembleAnswer) break;
+        if (ai.isSynthesisAnswer && (ai.meta as any)?.synthForUserTurnId === userTurnId) {
+          return { index: i, turn: ai };
+        }
+      }
+    }
+    return null;
+  }, [messages, findRoundForUserTurn]);
+
+  const findExistingEnsembleTurnForRound = useCallback((userTurnId: string): { index: number; turn: AiTurn } | null => {
+    const round = findRoundForUserTurn(userTurnId);
+    if (!round) return null;
+    const { userIndex } = round;
+    for (let i = userIndex + 1; i < messages.length; i++) {
+      const t = messages[i];
+      if (t.type === 'user') break;
+      if (t.type === 'ai') {
+        const ai = t as AiTurn;
+        if (!ai.isSynthesisAnswer && !ai.isEnsembleAnswer) break;
+        if (ai.isEnsembleAnswer && (ai.meta as any)?.synthForUserTurnId === userTurnId) {
+          return { index: i, turn: ai };
+        }
+      }
+    }
+    return null;
+  }, [messages, findRoundForUserTurn]);
+
+  const findFirstInsertIndexBeforeAi = useCallback((userTurnId: string) => {
+    const round = findRoundForUserTurn(userTurnId);
+    if (!round) return -1;
+    const { userIndex, aiIndex } = round;
+    // We want to insert after any existing synthesis/ensemble blocks for this round, but before main AI outputs
+    let insertAt = userIndex + 1;
+    for (let i = userIndex + 1; i < messages.length; i++) {
+      const t = messages[i];
+      if (t.type === 'user') break;
+      if (t.type === 'ai') {
+        const ai = t as AiTurn;
+        if ((ai.isSynthesisAnswer || ai.isEnsembleAnswer) && (ai.meta as any)?.synthForUserTurnId === userTurnId) {
+          insertAt = i + 1; // insert after the last synthesis/ensemble block of this round
+          continue;
+        }
+        // First non-synth/ensemble AI encountered: we must insert before it
+        break;
+      }
+    }
+    // If there is a provider AI index and our insertAt is after it (edge), clamp to aiIndex
+    if (aiIndex !== -1 && insertAt > aiIndex) return aiIndex;
+    return insertAt;
+  }, [messages, findRoundForUserTurn]);
+
+  const providerHasActivityAfter = useCallback((providerId: string, roundAiIndex: number): boolean => {
+    if (roundAiIndex === -1) return false;
+    for (let i = roundAiIndex + 1; i < messages.length; i++) {
+      const t = messages[i];
+      if (t.type !== 'ai') continue;
+      const ai = t as AiTurn;
+      if (ai.providerResponses && ai.providerResponses[providerId]) return true;
+    }
+    return false;
+  }, [messages]);
+
+  const buildEligibleMapForRound = useCallback((userTurnId: string): {
+    map: Record<string, { disabled: boolean; reason?: string }>;
+    disableSynthesisRun: boolean;
+    disableEnsembleRun: boolean;
+  } => {
+    const round = findRoundForUserTurn(userTurnId);
+    if (!round) return { map: {}, disableSynthesisRun: true, disableEnsembleRun: true };
+
+    const { aiIndex, ai } = round;
+    const outputs = Object.values(ai?.providerResponses || {}).filter(r => r.status === 'completed' && r.text?.trim());
+    const enoughOutputs = outputs.length >= 2;
+
+    const existingSynth = findExistingSynthesisTurnForRound(userTurnId);
+    const alreadySynthPids = existingSynth ? Object.keys(existingSynth.turn.providerResponses || {}) : [];
+
+    const map: Record<string, { disabled: boolean; reason?: string }> = {};
+    LLM_PROVIDERS_CONFIG.forEach(p => {
+      const contAfter = providerHasActivityAfter(p.id, aiIndex);
+      const alreadySynth = alreadySynthPids.includes(p.id);
+      if (!enoughOutputs) {
+        map[p.id] = { disabled: true, reason: 'Need ≥ 2 model outputs in this round' };
+      } else if (contAfter) {
+        map[p.id] = { disabled: true, reason: 'Provider continued after this round' };
+      } else if (alreadySynth) {
+        map[p.id] = { disabled: true, reason: 'Already synthesized for this round' };
+      } else {
+        map[p.id] = { disabled: false };
+      }
+    });
+
+    return {
+      map,
+      disableSynthesisRun: !enoughOutputs,
+      disableEnsembleRun: !enoughOutputs,
+    };
+  }, [findRoundForUserTurn, findExistingSynthesisTurnForRound, providerHasActivityAfter]);
+
+  // ===== Round bar handlers =====
+  const handleToggleSynthForRound = useCallback((userTurnId: string, providerId: string) => {
+    setSynthSelectionsByRound(prev => {
+      const current = prev[userTurnId] || {};
+      return { ...prev, [userTurnId]: { ...current, [providerId]: !current[providerId] } };
+    });
+  }, []);
+
+  const handleSelectEnsembleForRound = useCallback((userTurnId: string, providerId: string) => {
+    setEnsembleSelectionByRound(prev => {
+      const current = prev[userTurnId] || null;
+      return { ...prev, [userTurnId]: current === providerId ? null : providerId };
+    });
+  }, []);
+
+  const handleRunSynthesisForRound = useCallback(async (userTurnId: string) => {
+    if (!currentSessionId || isSynthRunningRef.current) return;
+
+    const round = findRoundForUserTurn(userTurnId);
+    if (!round || !round.user || !round.ai) return;
+
+    const results: Record<string, string> = {};
+    Object.entries(round.ai.providerResponses || {}).forEach(([pid, resp]) => {
+      if (resp.status === 'completed' && resp.text?.trim()) results[pid] = resp.text!;
+    });
+    if (Object.keys(results).length < 2) return;
+
+    const selected = Object.entries(synthSelectionsByRound[userTurnId] || {})
+      .filter(([_, on]) => on)
+      .map(([pid]) => pid);
+    const normalized = selected.filter(pid => ['claude', 'gemini', 'chatgpt'].includes(pid)) as Array<'claude'|'gemini'|'chatgpt'>;
+    if (normalized.length === 0) return;
+
+    const existing = findExistingSynthesisTurnForRound(userTurnId);
+    let synthTurnId = existing?.turn.id || `ai-synth-${userTurnId}`;
+    const insertAt = findFirstInsertIndexBeforeAi(userTurnId);
+
+    if (!existing) {
+      const initResp = normalized.reduce((acc, pid) => {
+        acc[pid] = { providerId: pid, text: '', status: 'pending', createdAt: Date.now() } as ProviderResponse;
+        return acc;
+      }, {} as Record<string, ProviderResponse>);
+      const newTurn: AiTurn = {
+        type: 'ai',
+        id: synthTurnId,
+        createdAt: Date.now(),
+        sessionId: currentSessionId,
+        isSynthesisAnswer: true,
+        meta: { synthForUserTurnId: userTurnId },
+        providerResponses: initResp
+      };
+      setMessages(prev => {
+        const updated = [...prev];
+        updated.splice(insertAt, 0, newTurn);
+        return updated;
+      });
+    } else {
+      setMessages(prev => {
+        const updated = [...prev];
+        const idx = updated.findIndex(t => t.id === existing.turn.id);
+        if (idx >= 0) {
+          const ai = updated[idx] as AiTurn;
+          const merged = { ...(ai.providerResponses || {}) } as Record<string, ProviderResponse>;
+          normalized.forEach(pid => {
+            if (!merged[pid]) {
+              merged[pid] = { providerId: pid, text: '', status: 'pending', createdAt: Date.now() } as ProviderResponse;
+            }
+          });
+          updated[idx] = { ...ai, providerResponses: merged } as AiTurn;
+        }
+        return updated;
+      });
+    }
+
+    // Stream into this synthesis turn
+    activeAiTurnIdRef.current = synthTurnId;
+    setIsLoading(true);
+    setUiPhase('streaming');
+    setCurrentAppStep('synthesis');
+    isSynthRunningRef.current = true;
+
+    const originalPrompt = round.user.text || '';
+    const idempotencyToken = `${currentSessionId}:${userTurnId}:synth:${normalized.sort().join('+')}`;
+
+    try {
+      if (typeof api.ensurePort === 'function') {
+        const port = await api.ensurePort({ sessionId: currentSessionId });
+        if (port && handlePortMessageRef.current && lastAttachedPortRef.current !== port) {
+          port.onMessage.addListener(handlePortMessageRef.current);
+          lastAttachedPortRef.current = port;
+        }
+      }
+      if (normalized.length === 1) {
+        setLastSynthesisModel(normalized[0]);
+      }
+      // fan-out supported by backend API; pass array when >1
+      await api.executeSynthesis(currentSessionId, originalPrompt, results, normalized.length === 1 ? normalized[0] : normalized, uiTabId, { idempotencyToken });
+    } catch (err) {
+      console.error('Synthesis run failed:', err);
+      setIsLoading(false);
+      setUiPhase('awaiting_action');
+      activeAiTurnIdRef.current = null;
+    } finally {
+      isSynthRunningRef.current = false;
+    }
+  }, [currentSessionId, synthSelectionsByRound, uiTabId, findRoundForUserTurn, findExistingSynthesisTurnForRound, findFirstInsertIndexBeforeAi]);
+
+  const handleRunEnsembleForRound = useCallback(async (userTurnId: string) => {
+    if (!currentSessionId) return;
+
+    const round = findRoundForUserTurn(userTurnId);
+    if (!round || !round.user || !round.ai) return;
+
+    const modelOutputs: Record<string, string> = {};
+    Object.entries(round.ai.providerResponses || {}).forEach(([pid, resp]) => {
+      if (resp.status === 'completed' && resp.text?.trim()) modelOutputs[pid] = resp.text!;
+    });
+    if (Object.keys(modelOutputs).length < 2) return;
+
+    const ensemblerProvider = ensembleSelectionByRound[userTurnId];
+    if (!ensemblerProvider) return;
+
+    const ensemblerPrompt = buildEnsemblerPrompt(round.user.text || '', modelOutputs);
+
+    setIsLoading(true);
+    setUiPhase('streaming');
+    setCurrentAppStep('synthesis');
+
+    const existing = findExistingEnsembleTurnForRound(userTurnId);
+    const aiTurnId = existing?.turn.id || `ai-ensemble-${userTurnId}`;
+    const insertAt = findFirstInsertIndexBeforeAi(userTurnId);
+
+    if (!existing) {
+      const aiTurn: AiTurn = {
+        type: 'ai',
+        id: aiTurnId,
+        createdAt: Date.now(),
+        sessionId: currentSessionId,
+        isEnsembleAnswer: true,
+        meta: { synthForUserTurnId: userTurnId },
+        providerResponses: {
+          [ensemblerProvider]: {
+            providerId: ensemblerProvider,
+            text: '',
+            status: 'pending',
+            createdAt: Date.now()
+          }
+        }
+      };
+      setMessages(prev => {
+        const updated = [...prev];
+        updated.splice(insertAt, 0, aiTurn);
+        return updated;
+      });
+    }
+
+    activeAiTurnIdRef.current = aiTurnId;
+
+    try {
+      const handlePortMessage = createPortMessageHandler();
+      handlePortMessageRef.current = handlePortMessage;
+
+      const providerConfig = LLM_PROVIDERS_CONFIG.find(p => p.id === ensemblerProvider);
+      if (!providerConfig) throw new Error("Ensembler provider not found");
+
+      const { port } = api.executeBatchPrompt(
+        ensemblerPrompt,
+        [providerConfig],
+        isVisibleMode,
+        uiTabId,
+        handlePortMessage,
+        currentSessionId
+      );
+      lastAttachedPortRef.current = port;
+    } catch (err) {
+      console.error('Ensemble run failed:', err);
+      setIsLoading(false);
+      setUiPhase('awaiting_action');
+      activeAiTurnIdRef.current = null;
+    }
+  }, [currentSessionId, ensembleSelectionByRound, uiTabId, isVisibleMode, buildEnsemblerPrompt, findRoundForUserTurn, findExistingEnsembleTurnForRound, findFirstInsertIndexBeforeAi, createPortMessageHandler]);
 
   // Utility: Estimate item size for virtual list (fallback before actual measure)
   const itemSizeEstimator = useCallback((index: number): number => {
@@ -454,30 +796,25 @@ const App = () => {
 
       // Helper to update provider in active AI turn
       const updateProvider = (providerId: string, text: string | undefined, isPartial?: boolean, status?: string) => {
-        if (!providerId || !activeAiTurnIdRef.current) return;
-        
-        updateLastAiTurn(aiTurn => {
-          if (aiTurn.id !== activeAiTurnIdRef.current) return aiTurn;
-          
+        const activeId = activeAiTurnIdRef.current;
+        if (!providerId || !activeId) return;
+        updateAiTurnById(activeId, aiTurn => {
+          if (aiTurn.id !== activeId) return aiTurn;
           const existing = aiTurn.providerResponses?.[providerId] || { 
             providerId, text: '', status: 'pending', createdAt: Date.now() 
           } as ProviderResponse;
-          
           const newText = isPartial ? (existing.text + (text || '')) : (text ?? existing.text);
           const newStatus = (status as ProviderResponse['status']) || (isPartial ? 'streaming' : (text ? 'completed' : existing.status));
-          
           const updatedResponse = { 
             ...existing, 
             text: newText, 
             status: newStatus, 
             updatedAt: Date.now() 
           };
-          
           const updatedResponses = { 
             ...(aiTurn.providerResponses || {}), 
             [providerId]: updatedResponse 
           };
-          
           return { ...aiTurn, providerResponses: updatedResponses };
         });
       };
@@ -541,7 +878,7 @@ const App = () => {
 
       // Synthesis messages
       if (typeLower.includes('synthesis')) {
-        const providerId = lastSynthesisModel;
+        const providerId = message.providerId || message.provider || lastSynthesisModel;
         let synthText = message.text || message.chunk || message.partialText || message.result || '';
         
         if (!synthText && Array.isArray(message.payload)) {
@@ -717,93 +1054,8 @@ const App = () => {
   }, [currentSessionId, selectedModels, providerContexts, uiTabId]);
 
   const handleSynthesize = useCallback(async (providerId: string) => {
-    if (!currentSessionId || isSynthRunningRef.current) return;
-
-    let synthProvider: 'claude' | 'gemini' | 'chatgpt';
-    if (providerId === 'claude' || providerId === 'gemini' || providerId === 'chatgpt') {
-      synthProvider = providerId as 'claude' | 'gemini' | 'chatgpt';
-    } else {
-      synthProvider = 'gemini';
-    }
-    
-    // Find most recent completed provider responses
-    const lastAiTurn = [...messages].reverse().find(t => 
-      t.type === 'ai' && t.sessionId === currentSessionId
-    ) as AiTurn | undefined;
-    
-    if (!lastAiTurn?.providerResponses) return;
-    
-    const completed = Object.entries(lastAiTurn.providerResponses).filter(([_, resp]) => 
-      resp.status === 'completed' && resp.text
-    );
-    
-    if (completed.length === 0) return;
-
-    const allBatchResults: Record<string, string> = {};
-    completed.forEach(([id, resp]) => {
-      allBatchResults[id] = resp.text;
-    });
-
-    // 1. Push visible user turn
-    const userTurn: UserTurn = {
-      type: 'user',
-      id: `user-${Date.now()}`,
-      text: 'Synthesize the above responses',
-      createdAt: Date.now(),
-      sessionId: currentSessionId,
-    };
-    const aiTurnId = `ai-${Date.now()}`;
-    setPendingUserTurns(prev => new Map(prev).set(aiTurnId, userTurn));
-    setMessages(prev => [...prev, userTurn]);
-
-    // 2. Push AI turn with synthesis provider
-    const aiTurn: AiTurn = {
-      type: 'ai',
-      id: aiTurnId,
-      createdAt: Date.now(),
-      sessionId: currentSessionId,
-      isSynthesisAnswer: true,
-      providerResponses: {
-        [synthProvider]: {
-          providerId: synthProvider,
-          text: '',
-          status: 'pending',
-          createdAt: Date.now()
-        }
-      }
-    };
-    setMessages(prev => [...prev, aiTurn]);
-    activeAiTurnIdRef.current = aiTurnId;
-
-    setIsLoading(true);
-    setUiPhase('streaming');
-    setCurrentAppStep('synthesis');
-    setLastSynthesisModel(synthProvider);
-    isSynthRunningRef.current = true;
-
-    try {
-      if (typeof api.ensurePort === 'function') {
-        const port = await api.ensurePort({ sessionId: currentSessionId });
-        if (port && handlePortMessageRef.current && lastAttachedPortRef.current !== port) {
-          port.onMessage.addListener(handlePortMessageRef.current);
-          lastAttachedPortRef.current = port;
-        }
-      }
-
-      await api.executeSynthesis(currentSessionId, '', allBatchResults, synthProvider, uiTabId);
-    } catch (err) {
-      console.error('Synthesis failed:', err);
-      setIsLoading(false);
-      setUiPhase('awaiting_action');
-      activeAiTurnIdRef.current = null;
-      setPendingUserTurns(prev => {
-        const newMap = new Map(prev);
-        newMap.delete(aiTurnId);
-        return newMap;
-      });
-    } finally {
-      isSynthRunningRef.current = false;
-    }
+    // Legacy global synth no longer used; round-level bar handles synthesis
+    return;
   }, [currentSessionId, messages, uiTabId]);
 
   // =========================================
@@ -852,98 +1104,8 @@ ${modelOutputsBlock}`;
     return tpl;
   }, []);
 
-  const handleEnsembleTurn = useCallback(async () => {
-    if (!currentSessionId) return;
-
-    // Find most recent completed provider responses
-    const lastAiTurn = [...messages].reverse().find(t => 
-      t.type === 'ai' && t.sessionId === currentSessionId
-    ) as AiTurn | undefined;
-    
-    if (!lastAiTurn?.providerResponses) return;
-    
-    const completed = Object.entries(lastAiTurn.providerResponses).filter(([_, resp]) => 
-      resp.status === 'completed' && resp.text
-    );
-    
-    if (completed.length < 2) {
-      console.warn("Ensemble requires at least 2 completed responses.");
-      return;
-    }
-
-    const modelOutputs: Record<string, string> = {};
-    completed.forEach(([id, resp]) => {
-      modelOutputs[id] = resp.text;
-    });
-
-    const ensemblerProvider = 'claude' as const;
-    const lastUserPrompt = messages.filter(isUserTurn).slice(-1)[0]?.text || '';
-    const ensemblerPrompt = buildEnsemblerPrompt(lastUserPrompt, modelOutputs);
-
-    setIsLoading(true);
-    setUiPhase('streaming');
-    setCurrentAppStep('synthesis');
-
-    // 1. Push visible user turn
-    const userTurn: UserTurn = {
-      type: 'user',
-      id: `user-${Date.now()}`,
-      text: 'Ensemble the above responses',
-      createdAt: Date.now(),
-      sessionId: currentSessionId,
-    };
-    const aiTurnId = `ai-${Date.now()}`;
-    setPendingUserTurns(prev => new Map(prev).set(aiTurnId, userTurn));
-    setMessages(prev => [...prev, userTurn]);
-
-    // 2. Push AI turn with ensembler provider
-    const aiTurn: AiTurn = {
-      type: 'ai',
-      id: aiTurnId,
-      createdAt: Date.now(),
-      sessionId: currentSessionId,
-      isEnsembleAnswer: true,
-      providerResponses: {
-        [ensemblerProvider]: {
-          providerId: ensemblerProvider,
-          text: '',
-          status: 'pending',
-          createdAt: Date.now()
-        }
-      }
-    };
-    setMessages(prev => [...prev, aiTurn]);
-    activeAiTurnIdRef.current = aiTurnId;
-
-    try {
-      const handlePortMessage = createPortMessageHandler();
-      handlePortMessageRef.current = handlePortMessage;
-      
-      const providerConfig = LLM_PROVIDERS_CONFIG.find(p => p.id === ensemblerProvider);
-      if (!providerConfig) throw new Error("Ensembler provider not found");
-
-      const { port } = api.executeBatchPrompt(
-        ensemblerPrompt,
-        [providerConfig],
-        isVisibleMode,
-        uiTabId,
-        handlePortMessage,
-        currentSessionId
-      );
-      
-      lastAttachedPortRef.current = port;
-    } catch (err) {
-      console.error('Ensemble turn failed:', err);
-      setIsLoading(false);
-      setUiPhase('awaiting_action');
-      activeAiTurnIdRef.current = null;
-      setPendingUserTurns(prev => {
-        const newMap = new Map(prev);
-        newMap.delete(aiTurnId);
-        return newMap;
-      });
-    }
-  }, [currentSessionId, messages, uiTabId, isVisibleMode, createPortMessageHandler, buildEnsemblerPrompt]);
+  // Deprecated global ensemble (replaced by per-round run)
+  const handleEnsembleTurn = useCallback(async () => { return; }, []);
 
   const getSelectedModelIds = useCallback((): string[] => {
     return LLM_PROVIDERS_CONFIG.filter((p: LLMProvider) => selectedModels[p.id]).map(p => p.id);
@@ -1125,24 +1287,39 @@ ${modelOutputsBlock}`;
       return () => ro.disconnect();
     }, [index, turn && turn.id, expandedUserTurns[turn?.id || ''] , isReducedMotion, currentAppStep]);
 
-    return (
-      <div style={style}>
-        <div ref={containerRef} style={{ padding: '8px 0' }}>
-          {turn && isUserTurn(turn) ? (
+    if (turn && isUserTurn(turn)) {
+      const { map, disableSynthesisRun, disableEnsembleRun } = buildEligibleMapForRound(turn.id);
+      return (
+        <div style={style}>
+          <div ref={containerRef} style={{ padding: '8px 0' }}>
             <UserTurnBlock
               userTurn={turn as UserTurn}
               isExpanded={expandedUserTurns[turn.id] ?? true}
               onToggle={handleToggleUserTurn}
+              synthSelected={synthSelectionsByRound[turn.id] || {}}
+              onToggleSynth={handleToggleSynthForRound}
+              onRunSynthesis={handleRunSynthesisForRound}
+              ensembleSelected={ensembleSelectionByRound[turn.id] || null}
+              onSelectEnsemble={handleSelectEnsembleForRound}
+              onRunEnsemble={handleRunEnsembleForRound}
+              eligibleMap={map}
+              disableSynthesisRun={disableSynthesisRun}
+              disableEnsembleRun={disableEnsembleRun}
             />
-          ) : turn && isAiTurn(turn) ? (
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div style={style}>
+        <div ref={containerRef} style={{ padding: '8px 0' }}>
+          {turn && isAiTurn(turn) ? (
             <AiTurnBlock
               aiTurn={turn as AiTurn}
               isLive={turn.id === activeAiTurnIdRef.current}
               isReducedMotion={isReducedMotion}
               currentAppStep={currentAppStep}
-              onSynthesize={handleSynthesize}
-              selectedSynthModelIds={getSelectedModelIds()}
-              onStartEnsemble={handleEnsembleTurn}
             />
           ) : null}
         </div>
