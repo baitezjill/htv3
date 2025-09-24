@@ -50,7 +50,7 @@ export function useDelegatedScroll(outerRef: React.RefObject<HTMLElement | null>
 
     outer.addEventListener('wheel', handleWheel, { passive: false });
     return () => {
-      outer.removeEventListener('wheel', handleWheel as any);
+      try { outer.removeEventListener('wheel', handleWheel as any); } catch {}
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
   }, [outerRef]);

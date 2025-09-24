@@ -108,12 +108,8 @@ const App = () => {
     setTimeout(() => listRef.current?.resetAfterIndex(0), 0);
   }, []);
 
-  // Ensure react-window remeasures item heights whenever dynamic content changes
-  useEffect(() => {
-    try {
-      listRef.current?.resetAfterIndex(0, true);
-    } catch {}
-  }, [messages, uiPhase, currentAppStep, isLoading, showWelcome]);
+  // Remove frequent full re-measures; per-row ResizeObserver handles dynamic size
+  // A full remeasure still occurs when messages length changes (see below)
 
   // Utility: Update last AI turn in messages array atomically
   const updateLastAiTurn = useCallback((updater: (aiTurn: AiTurn) => AiTurn) => {
@@ -246,14 +242,27 @@ const App = () => {
     try { listRef.current?.resetAfterIndex(0, true); } catch {}
   }, [messages]);
 
-  // Track outer scrollTop to detect mid-scroll momentum
-  useEffect(() => {
+  // Helper: determine if user is near the bottom of the outer scroller
+  const isNearBottom = useCallback(() => {
+    const el = outerScrollRef.current;
+    if (!el) return true;
+    const distance = el.scrollHeight - el.clientHeight - el.scrollTop;
+    return distance <= 80; // px threshold
+  }, []);
+
+  // Handle scroll on the outer scroller: track last scrollTop, update stickiness, and debounce-save position
+  const handleOuterScroll = useCallback(() => {
     const el = outerScrollRef.current;
     if (!el) return;
-    const onScroll = () => { lastScrollTopRef.current = el.scrollTop; };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  }, []);
+    lastScrollTopRef.current = el.scrollTop;
+    scrollBottomRef.current = isNearBottom();
+
+    // Debounce persist
+    if (scrollSaveTimeoutRef.current) window.clearTimeout(scrollSaveTimeoutRef.current);
+    scrollSaveTimeoutRef.current = window.setTimeout(() => {
+      persistenceService.saveScrollPosition(el.scrollTop, currentSessionId).catch(console.error);
+    }, 500) as unknown as number;
+  }, [currentSessionId, isNearBottom]);
 
   useDelegatedScroll(outerScrollRef);
 
@@ -385,27 +394,35 @@ const App = () => {
     return () => {};
   }, [isHistoryPanelOpen]);
 
-  // Scroll position persistence
+  // Scroll position persistence (before unload only; routine saves handled in handleOuterScroll)
   useEffect(() => {
     const saveScrollPosition = () => {
-      const scrollPosition = window.scrollY;
-      persistenceService.saveScrollPosition(scrollPosition, currentSessionId).catch(console.error);
+      const el = outerScrollRef.current;
+      const position = el ? el.scrollTop : 0;
+      persistenceService.saveScrollPosition(position, currentSessionId).catch(console.error);
     };
 
-    const handleScroll = () => {
-      if (scrollSaveTimeoutRef.current) clearTimeout(scrollSaveTimeoutRef.current);
-      scrollSaveTimeoutRef.current = window.setTimeout(saveScrollPosition, 500) as unknown as number;
-    };
-
-    window.addEventListener('scroll', handleScroll);
     window.addEventListener('beforeunload', saveScrollPosition);
-
     return () => {
-      window.removeEventListener('scroll', handleScroll);
       window.removeEventListener('beforeunload', saveScrollPosition);
       if (scrollSaveTimeoutRef.current) clearTimeout(scrollSaveTimeoutRef.current);
     };
   }, [currentSessionId]);
+
+  // Attach scroll listener to the actual react-window outer scroller and
+  // update the outerScrollRef to point at it for consistent behavior
+  useEffect(() => {
+    const list = listRef.current as any;
+    const el: HTMLElement | null = list && (list._outerRef as HTMLElement | null);
+    if (!el) return;
+    outerScrollRef.current = el;
+    // Initialize stickiness based on current position
+    scrollBottomRef.current = isNearBottom();
+    el.addEventListener('scroll', handleOuterScroll, { passive: true });
+    return () => {
+      try { el.removeEventListener('scroll', handleOuterScroll as any); } catch {}
+    };
+  }, [handleOuterScroll, isNearBottom, listRef]);
 
   // Port message handler - streams directly into messages array
   const createPortMessageHandler = useCallback(() => {
@@ -1017,10 +1034,15 @@ ${modelOutputsBlock}`;
           setIsContinuationMode(hasAiTurn);
         }
       }
-      // Restore scroll if applicable
+      // Restore scroll if applicable (outer scroller, not window)
       const scrollState = await persistenceService.loadScrollPosition();
       if (scrollState && scrollState.sessionId === sessionId) {
-        setTimeout(() => window.scrollTo({ top: scrollState.position || 0, behavior: 'smooth' }), 100);
+        setTimeout(() => {
+          const el = outerScrollRef.current;
+          if (el) el.scrollTop = scrollState.position || 0;
+          // Update stickiness after restore
+          scrollBottomRef.current = isNearBottom();
+        }, 100);
       }
     } catch (error) {
       console.error('Error loading session:', error);
@@ -1275,7 +1297,7 @@ ${modelOutputsBlock}`;
             )}
 
             {!showWelcome && (
-              <div ref={outerScrollRef} style={{ height: Math.max(300, window.innerHeight - 220), overflowY: 'auto', overflowX: 'hidden', padding: '0 4px' }}>
+              <div ref={outerScrollRef} style={{ height: Math.max(300, window.innerHeight - 220), overflowY: 'hidden', overflowX: 'hidden', padding: '0 4px' }}>
               <List
                 ref={listRef}
                 height={Math.max(300, window.innerHeight - 220)}
