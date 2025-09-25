@@ -1117,6 +1117,17 @@ ${modelOutputsBlock}`;
     activeAiTurnIdRef.current = aiTurnId;
 
     try {
+      // Set up port message handler for continuation responses
+      const handlePortMessage = createPortMessageHandler();
+      handlePortMessageRef.current = handlePortMessage;
+      
+      // Get the port that will be used for continuation
+      const port = await api.ensurePort({ sessionId: currentSessionId });
+      if (port && handlePortMessageRef.current && lastAttachedPortRef.current !== port) {
+        port.onMessage.addListener(handlePortMessageRef.current);
+        lastAttachedPortRef.current = port;
+      }
+      
       await api.executeContinuationPrompt({
         prompt: trimmed,
         providers: providerIds,
@@ -1134,7 +1145,7 @@ ${modelOutputsBlock}`;
         return newMap;
       });
     }
-  }, [currentSessionId, selectedModels, providerContexts, uiTabId]);
+  }, [currentSessionId, selectedModels, providerContexts, uiTabId, createPortMessageHandler]);
 
   const handleSynthesize = useCallback(async (providerId: string) => {
     // Legacy global synth no longer used; round-level bar handles synthesis
