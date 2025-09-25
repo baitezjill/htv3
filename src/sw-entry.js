@@ -1674,7 +1674,7 @@ async function initializeGlobalInfrastructure() {
   // Step 1: Core network and security infrastructure
   try {
     if (chrome.alarms) {
-      await NetRulesManager.init();
+      
       console.log("[HTOS] ✓ NetRulesManager initialized");
       
       CSPController.init();
