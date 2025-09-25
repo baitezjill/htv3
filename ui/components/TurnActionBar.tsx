@@ -18,6 +18,8 @@ interface TurnActionBarProps {
 
   // Per-provider grey-out
   eligibleMap?: Record<string, { disabled: boolean; reason?: string }>;
+  // Ensemble-specific grey-out (separate from synthesis)
+  ensembleEligibleMap?: Record<string, { disabled: boolean; reason?: string }>;
 
   // Optional guards
   disableSynthesisRun?: boolean;
@@ -34,6 +36,7 @@ const TurnActionBar = ({
   onSelectEnsemble,
   onRunEnsemble,
   eligibleMap = {},
+  ensembleEligibleMap = {},
   disableSynthesisRun = false,
   disableEnsembleRun = false,
 }: TurnActionBarProps) => {
@@ -42,7 +45,8 @@ const TurnActionBar = ({
     isSelected: boolean,
     onClick: () => void,
     isDisabled: boolean,
-    title: string
+    title: string,
+    accentHex?: string
   ) => (
     <button
       key={pid}
@@ -55,12 +59,15 @@ const TurnActionBar = ({
         gap: 6,
         padding: '6px 10px',
         borderRadius: 999,
-        border: '1px solid #475569',
-        background: isSelected ? '#334155' : '#0f172a',
+        border: isSelected && accentHex ? `1px solid ${accentHex}` : '1px solid #475569',
+        background: isSelected
+          ? (accentHex ? 'rgba(16,185,129,0.12)' : '#334155')
+          : '#0f172a',
         color: isDisabled ? '#64748b' : '#e2e8f0',
         opacity: isDisabled ? 0.6 : 1,
         fontSize: 12,
-        cursor: (isDisabled || isLoading) ? 'not-allowed' : 'pointer'
+        cursor: (isDisabled || isLoading) ? 'not-allowed' : 'pointer',
+        boxShadow: isSelected && accentHex ? `0 0 0 2px ${accentHex}20` : undefined,
       }}
     >
       {isSelected ? '✓' : '○'} {LLM_PROVIDERS_CONFIG.find(p => p.id === pid)?.name || pid}
@@ -114,12 +121,16 @@ const TurnActionBar = ({
         <span style={{ color: '#94a3b8', fontSize: 12 }}>Ensemble with:</span>
         {LLM_PROVIDERS_CONFIG.map(p => {
           const isSelected = ensembleSelected === p.id;
+          const block = ensembleEligibleMap[p.id];
+          const isDisabled = !!block?.disabled;
+          const title = block?.reason ? `${p.name}: ${block.reason}` : `Choose ${p.name} to ensemble`;
           return renderToggle(
             p.id,
             isSelected,
             () => onSelectEnsemble(roundUserTurnId, p.id),
-            false,
-            `Choose ${p.name} to ensemble`
+            isDisabled,
+            title,
+            '#10b981'
           );
         })}
         <div style={{ flex: 1 }} />

@@ -51,11 +51,12 @@ interface UserTurnBlockProps {
   onSelectEnsemble?: (roundUserTurnId: string, providerId: string) => void;
   onRunEnsemble?: (roundUserTurnId: string) => void;
   eligibleMap?: Record<string, { disabled: boolean; reason?: string }>;
+  ensembleEligibleMap?: Record<string, { disabled: boolean; reason?: string }>;
   disableSynthesisRun?: boolean;
   disableEnsembleRun?: boolean;
 }
 
-const UserTurnBlock = ({ userTurn, isExpanded, onToggle, synthSelected = {}, onToggleSynth, onRunSynthesis, ensembleSelected = null, onSelectEnsemble, onRunEnsemble, eligibleMap = {}, disableSynthesisRun = false, disableEnsembleRun = false }: UserTurnBlockProps) => {
+const UserTurnBlock = ({ userTurn, isExpanded, onToggle, synthSelected = {}, onToggleSynth, onRunSynthesis, ensembleSelected = null, onSelectEnsemble, onRunEnsemble, eligibleMap = {}, ensembleEligibleMap = {}, disableSynthesisRun = false, disableEnsembleRun = false }: UserTurnBlockProps) => {
   const date = new Date(userTurn.createdAt);
   const readableTimestamp = date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
   const isoTimestamp = date.toISOString();
@@ -169,6 +170,7 @@ const UserTurnBlock = ({ userTurn, isExpanded, onToggle, synthSelected = {}, onT
             onSelectEnsemble={onSelectEnsemble!}
             onRunEnsemble={onRunEnsemble!}
             eligibleMap={eligibleMap}
+            ensembleEligibleMap={ensembleEligibleMap}
             disableSynthesisRun={disableSynthesisRun}
             disableEnsembleRun={disableEnsembleRun}
           />

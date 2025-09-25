@@ -335,12 +335,13 @@ const App = () => {
   }, [messages]);
 
   const buildEligibleMapForRound = useCallback((userTurnId: string): {
-    map: Record<string, { disabled: boolean; reason?: string }>;
+    synthMap: Record<string, { disabled: boolean; reason?: string }>;
+    ensembleMap: Record<string, { disabled: boolean; reason?: string }>;
     disableSynthesisRun: boolean;
     disableEnsembleRun: boolean;
   } => {
     const round = findRoundForUserTurn(userTurnId);
-    if (!round) return { map: {}, disableSynthesisRun: true, disableEnsembleRun: true };
+    if (!round) return { synthMap: {}, ensembleMap: {}, disableSynthesisRun: true, disableEnsembleRun: true };
 
     const { aiIndex, ai } = round;
     const outputs = Object.values(ai?.providerResponses || {}).filter(r => r.status === 'completed' && r.text?.trim());
@@ -349,27 +350,47 @@ const App = () => {
     const existingSynth = findExistingSynthesisTurnForRound(userTurnId);
     const alreadySynthPids = existingSynth ? Object.keys(existingSynth.turn.providerResponses || {}) : [];
 
-    const map: Record<string, { disabled: boolean; reason?: string }> = {};
+    // Build eligibility map for Synthesis (multi-select)
+    const synthMap: Record<string, { disabled: boolean; reason?: string }> = {};
     LLM_PROVIDERS_CONFIG.forEach(p => {
       const contAfter = providerHasActivityAfter(p.id, aiIndex);
       const alreadySynth = alreadySynthPids.includes(p.id);
       if (!enoughOutputs) {
-        map[p.id] = { disabled: true, reason: 'Need ≥ 2 model outputs in this round' };
+        synthMap[p.id] = { disabled: true, reason: 'Need ≥ 2 model outputs in this round' };
       } else if (contAfter) {
-        map[p.id] = { disabled: true, reason: 'Provider continued after this round' };
+        synthMap[p.id] = { disabled: true, reason: 'Provider continued after this round' };
       } else if (alreadySynth) {
-        map[p.id] = { disabled: true, reason: 'Already synthesized for this round' };
+        synthMap[p.id] = { disabled: true, reason: 'Already synthesized for this round' };
       } else {
-        map[p.id] = { disabled: false };
+        synthMap[p.id] = { disabled: false };
+      }
+    });
+
+    // Build eligibility map for Ensemble (single-select)
+    const existingEnsemble = findExistingEnsembleTurnForRound(userTurnId);
+    const alreadyEnsemblePids = existingEnsemble ? Object.keys(existingEnsemble.turn.providerResponses || {}) : [];
+    const ensembleMap: Record<string, { disabled: boolean; reason?: string }> = {};
+    LLM_PROVIDERS_CONFIG.forEach(p => {
+      const contAfter = providerHasActivityAfter(p.id, aiIndex);
+      const alreadyEnsembled = alreadyEnsemblePids.includes(p.id);
+      if (!enoughOutputs) {
+        ensembleMap[p.id] = { disabled: true, reason: 'Need ≥ 2 model outputs in this round' };
+      } else if (contAfter) {
+        ensembleMap[p.id] = { disabled: true, reason: 'Provider continued after this round' };
+      } else if (alreadyEnsembled) {
+        ensembleMap[p.id] = { disabled: true, reason: 'Already ensembled for this round' };
+      } else {
+        ensembleMap[p.id] = { disabled: false };
       }
     });
 
     return {
-      map,
+      synthMap,
+      ensembleMap,
       disableSynthesisRun: !enoughOutputs,
       disableEnsembleRun: !enoughOutputs,
     };
-  }, [findRoundForUserTurn, findExistingSynthesisTurnForRound, providerHasActivityAfter]);
+  }, [findRoundForUserTurn, findExistingSynthesisTurnForRound, findExistingEnsembleTurnForRound, providerHasActivityAfter]);
 
   // ===== Round bar handlers =====
   const handleToggleSynthForRound = useCallback((userTurnId: string, providerId: string) => {
@@ -1326,8 +1347,12 @@ ${modelOutputsBlock}`;
 
           requestAnimationFrame(() => {
             try { listRef.current?.resetAfterIndex(index, true); } catch {}
-            if (outer && isMidScroll) {
-              outer.scrollTop += delta;
+            if (outer) {
+              if (scrollBottomRef.current) {
+                outer.scrollTop = outer.scrollHeight - outer.clientHeight;
+              } else if (isMidScroll) {
+                outer.scrollTop += delta;
+              }
             }
           });
         }
@@ -1340,7 +1365,7 @@ ${modelOutputsBlock}`;
     }, [index, turn && turn.id, expandedUserTurns[turn?.id || ''] , isReducedMotion, currentAppStep]);
 
     if (turn && isUserTurn(turn)) {
-      const { map, disableSynthesisRun, disableEnsembleRun } = buildEligibleMapForRound(turn.id);
+      const { synthMap, ensembleMap, disableSynthesisRun, disableEnsembleRun } = buildEligibleMapForRound(turn.id);
       return (
         <div style={style}>
           <div ref={containerRef} style={{ padding: '8px 0' }}>
@@ -1354,7 +1379,8 @@ ${modelOutputsBlock}`;
               ensembleSelected={ensembleSelectionByRound[turn.id] || null}
               onSelectEnsemble={handleSelectEnsembleForRound}
               onRunEnsemble={handleRunEnsembleForRound}
-              eligibleMap={map}
+              eligibleMap={synthMap}
+              ensembleEligibleMap={ensembleMap}
               disableSynthesisRun={disableSynthesisRun}
               disableEnsembleRun={disableEnsembleRun}
             />
