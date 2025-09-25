@@ -673,13 +673,7 @@ class FaultTolerantOrchestrator {
         console.warn('[FaultTolerantOrchestrator] onAllComplete callback failed:', e);
       }
       
-      // Ensure final session state is saved regardless of onAllComplete result
-      if (sessionManager) {
-        console.log(`[FaultTolerantOrchestrator] Saving final session state for ${sessionId}`);
-        sessionManager.saveSession(sessionId).catch(e => {
-          console.error(`[FaultTolerantOrchestrator] Failed to save final session state for ${sessionId}:`, e);
-        });
-      }
+      // Session saving is handled by onAllComplete callback
       
       this.activeRequests.delete(sessionId);
       
@@ -764,13 +758,7 @@ class FaultTolerantOrchestrator {
         // Call the onAllComplete handler with results and errors
         onAllComplete(results, errors);
         
-        // Ensure final session state is saved
-        if (sessionManager) {
-          console.log(`[FaultTolerantOrchestrator] Saving final session state for continuation ${sessionId}`);
-          sessionManager.saveSession(sessionId).catch(e => {
-            console.error(`[FaultTolerantOrchestrator] Failed to save final session state for ${sessionId}:`, e);
-          });
-        }
+        // Session saving is handled by onAllComplete callback
       } catch (e) {
         console.warn('[FaultTolerantOrchestrator] onAllComplete callback failed:', e);
       }
