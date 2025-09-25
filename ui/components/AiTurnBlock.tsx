@@ -12,9 +12,10 @@ interface AiTurnBlockProps {
   isLive?: boolean;
   isReducedMotion?: boolean;
   currentAppStep?: AppStep;
+  onResumeProvider?: (providerId: string) => void;
 }
 
-const AiTurnBlock = ({ aiTurn, isLive = false, isReducedMotion = false, currentAppStep }: AiTurnBlockProps) => {
+const AiTurnBlock = ({ aiTurn, isLive = false, isReducedMotion = false, currentAppStep, onResumeProvider }: AiTurnBlockProps) => {
   const [showPerspectives, setShowPerspectives] = useState(false);
   const [hiddenTurns, setHiddenTurns] = useState<AiTurn[]>([]);
 
@@ -159,6 +160,7 @@ const AiTurnBlock = ({ aiTurn, isLive = false, isReducedMotion = false, currentA
           isLoading={isLive}
           currentAppStep={currentAppStep || (isLive ? 'awaitingSynthesis' : 'synthesisDone')}
           isReducedMotion={isReducedMotion}
+          onResumeProvider={onResumeProvider}
         />
       )}
 

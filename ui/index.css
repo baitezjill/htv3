@@ -128,3 +128,12 @@ footer {
 .provider-block:hover .copy-button-wrapper {
   opacity: 1;
 }
+
+/* Provider grid tuning */
+:root {
+  --provider-column-min-width: 300px;
+}
+
+.providers-layer {
+  grid-template-columns: repeat(auto-fit, minmax(var(--provider-column-min-width), 1fr)) !important;
+}

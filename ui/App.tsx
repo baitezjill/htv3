@@ -12,6 +12,8 @@ import { MenuIcon } from './components/Icons';
 import api from './services/extension-api';
 import persistenceService from './services/persistence';
 import { useDelegatedScroll } from './hooks/useDelegatedScroll';
+import StreamingScheduler, { SchedulerSnapshot } from './utils/streamingScheduler';
+import LruCache from './utils/lru';
 
 // Hoisted helper: Build the Ensembler prompt using provided fixed template from spec
 function buildEnsemblerPrompt(userPrompt: string, modelOutputs: Record<string, string>): string {
@@ -104,6 +106,44 @@ const App = () => {
   const sessionIdRef = useRef<string | null>(null);
   const isSynthRunningRef = useRef(false);
   const sizeMapRef = useRef<Record<string, number>>({});
+  const measureDebounceRef = useRef<number | null>(null);
+  const heightCacheRef = useRef(new LruCache<number>(1000));
+
+  // Streaming scheduler instance
+  const schedulerRef = useRef<StreamingScheduler | null>(null);
+  if (!schedulerRef.current) {
+    schedulerRef.current = new StreamingScheduler({
+      maxUpdatesPerFrame: 4,
+      onApply: (key, snapshot: SchedulerSnapshot) => {
+        // Key format: `${sessionId}:${roundId}:${providerId}`
+        const parts = key.split(':');
+        const roundId = parts[1];
+        const providerId = parts[2];
+        if (!roundId || !providerId) return;
+        setMessages(prev => {
+          const idx = prev.findIndex(t => t.type === 'ai' && (t as AiTurn).id === roundId);
+          if (idx === -1) return prev;
+          const updated = [...prev];
+          const aiTurn = { ...(updated[idx] as AiTurn) } as AiTurn;
+          const existing = aiTurn.providerResponses?.[providerId] || { providerId, text: '', status: 'pending', createdAt: Date.now() } as ProviderResponse;
+          const newText = snapshot.committedText + snapshot.tailText; // UI shows both, but tail is transient
+          const newStatus: ProviderResponse['status'] = snapshot.isFinal ? 'completed' : 'streaming';
+          aiTurn.providerResponses = {
+            ...(aiTurn.providerResponses || {}),
+            [providerId]: {
+              ...existing,
+              text: newText,
+              status: newStatus,
+              meta: { ...(existing.meta || {}), _tail: snapshot.tailText, _pending: snapshot.pendingCount, _paused: snapshot.paused, ...(snapshot.meta || {}) },
+              updatedAt: Date.now(),
+            },
+          };
+          updated[idx] = aiTurn;
+          return updated;
+        });
+      }
+    });
+  }
   
   // Update refs when state changes
   useEffect(() => {
@@ -120,6 +160,8 @@ const App = () => {
       // Force flush any pending saves
       try {
         persistenceService.flush?.();
+        // Disconnect port to cleanup connections
+        try { api.disconnectPort?.(); } catch {}
       } catch (e) {
         console.error('Shutdown save failed:', e);
       }
@@ -137,6 +179,7 @@ const App = () => {
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      try { api.disconnectPort?.(); } catch {}
     };
   }, []);
 
@@ -671,9 +714,13 @@ ${modelOutputsBlock}`;
     const turn = messages[index];
     if (!turn) return 100;
     const measured = sizeMapRef.current[turn.id];
-    return typeof measured === 'number' && measured > 0
-      ? measured
-      : itemSizeEstimator(index);
+    if (typeof measured === 'number' && measured > 0) return measured;
+    // fallback to cached height LRU if available
+    const sessId = sessionIdRef.current;
+    const cacheKey = `${sessId ?? 'null'}:${turn.id}`;
+    const cached = heightCacheRef.current.get(cacheKey);
+    if (typeof cached === 'number' && cached > 0) return cached;
+    return itemSizeEstimator(index);
   }, [messages, itemSizeEstimator]);
 
   // Keep size map in sync with messages (remove stale ids)
@@ -730,12 +777,13 @@ ${modelOutputsBlock}`;
     // Minor debounce/guard: only call if listRef exists
     if (listRef.current) {
       try {
-        // true -> also recompute the item sizes immediately
-        listRef.current.resetAfterIndex(0, true);
+        // Debounce measure/reset (60ms)
+        if (measureDebounceRef.current) window.clearTimeout(measureDebounceRef.current);
+        measureDebounceRef.current = window.setTimeout(() => {
+          try { listRef.current?.resetAfterIndex(0, true); } catch {}
+        }, 60) as unknown as number;
       } catch (e) {
-        // guard for unexpected internals
-        // don't throw in production UI render
-        console.warn('[UI] listRef.resetAfterIndex failed', e);
+        console.warn('[UI] listRef.resetAfterIndex scheduling failed', e);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -899,28 +947,20 @@ ${modelOutputsBlock}`;
       }
 
       // Helper to update provider in active AI turn
-      const updateProvider = (providerId: string, text: string | undefined, isPartial?: boolean, status?: string) => {
+      const updateProvider = (providerId: string, text: string | undefined, isPartial?: boolean, status?: string, meta?: any) => {
         const activeId = activeAiTurnIdRef.current;
         if (!providerId || !activeId) return;
-        updateAiTurnById(activeId, aiTurn => {
-          if (aiTurn.id !== activeId) return aiTurn;
-          const existing = aiTurn.providerResponses?.[providerId] || { 
-            providerId, text: '', status: 'pending', createdAt: Date.now() 
-          } as ProviderResponse;
-          const newText = isPartial ? (existing.text + (text || '')) : (text ?? existing.text);
-          const newStatus = (status as ProviderResponse['status']) || (isPartial ? 'streaming' : (text ? 'completed' : existing.status));
-          const updatedResponse = { 
-            ...existing, 
-            text: newText, 
-            status: newStatus, 
-            updatedAt: Date.now() 
-          };
-          const updatedResponses = { 
-            ...(aiTurn.providerResponses || {}), 
-            [providerId]: updatedResponse 
-          };
-          return { ...aiTurn, providerResponses: updatedResponses };
-        });
+        const sid = sessionIdRef.current;
+        const sched = schedulerRef.current!;
+        if (isPartial) {
+          sched.enqueue(sid, activeId, providerId, text || '', meta);
+        } else {
+          // final update or explicit status
+          if (text) {
+            sched.enqueue(sid, activeId, providerId, text, meta);
+          }
+          sched.markCompleted(sid, activeId, providerId);
+        }
       };
 
       const rawType = (message.type || message.event || '').toString();
@@ -931,14 +971,14 @@ ${modelOutputsBlock}`;
         message.results.forEach((r: any) => {
           const providerId = r.provider || r.providerId || r.providerKey;
           const text = r.result || r.response || r.resultText;
-          updateProvider(providerId, text, false, 'completed');
+          updateProvider(providerId, text, false, 'completed', r.meta);
         });
         return;
       } else if (message.results && typeof message.results === 'object') {
         try {
           Object.entries(message.results).forEach(([pid, obj]: any) => {
             const text = obj?.text || obj?.response || obj?.result || '';
-            updateProvider(pid, text, false, 'completed');
+            updateProvider(pid, text, false, 'completed', obj?.meta);
           });
           return;
         } catch {}
@@ -950,7 +990,7 @@ ${modelOutputsBlock}`;
         const txt = message.data.result || message.data.text || message.data.response;
         const partial = !!message.data.isPartial || !!message.data.partial;
         if (prov) {
-          updateProvider(prov, txt, partial, message.data.status);
+          updateProvider(prov, txt, partial, message.data.status, message.data.meta);
           return;
         }
       }
@@ -968,7 +1008,7 @@ ${modelOutputsBlock}`;
         const isPartial = !!message.isPartial || !!message.partial || typeLower.includes('partial');
         const status = message.status || (typeLower.includes('complete') ? 'completed' : undefined);
         
-        updateProvider(providerId, text, isPartial, status);
+        updateProvider(providerId, text, isPartial, status, message.meta);
         
         // Capture provider context
         if (message.meta && providerId) {
@@ -992,7 +1032,7 @@ ${modelOutputsBlock}`;
         const isPartial = !!message.isPartial || !!message.partial || typeLower.includes('partial');
         const status = message.status || (typeLower.includes('complete') ? 'completed' : undefined);
 
-        updateProvider(providerId, synthText, isPartial, status);
+        updateProvider(providerId, synthText, isPartial, status, message.meta);
         return;
       }
 
@@ -1339,14 +1379,26 @@ ${modelOutputsBlock}`;
         if (height && Math.abs(height - prev) > 1) {
           const delta = height - prev;
           sizeMapRef.current[turn.id] = height;
+          // persist to LRU by sessionId:roundId
+          const sessId = sessionIdRef.current;
+          const cacheKey = `${sessId ?? 'null'}:${turn.id}`;
+          try { heightCacheRef.current.set(cacheKey, height); } catch {}
           prev = height;
 
           // Preserve viewport: if user is mid-scroll, offset outer scrollTop by delta
           const outer = outerScrollRef.current;
           const isMidScroll = outer ? outer.scrollTop > 0 && outer.scrollTop !== lastScrollTopRef.current : false;
 
+          // Debounced reset to reduce layout thrash
+          const scheduleReset = () => {
+            if (measureDebounceRef.current) window.clearTimeout(measureDebounceRef.current);
+            measureDebounceRef.current = window.setTimeout(() => {
+              try { listRef.current?.resetAfterIndex(index, true); } catch {}
+            }, 60) as unknown as number;
+          };
+
           requestAnimationFrame(() => {
-            try { listRef.current?.resetAfterIndex(index, true); } catch {}
+            scheduleReset();
             if (outer) {
               if (scrollBottomRef.current) {
                 outer.scrollTop = outer.scrollHeight - outer.clientHeight;
@@ -1398,6 +1450,13 @@ ${modelOutputsBlock}`;
               isLive={turn.id === activeAiTurnIdRef.current}
               isReducedMotion={isReducedMotion}
               currentAppStep={currentAppStep}
+              onResumeProvider={(providerId: string) => {
+                try {
+                  const sched = schedulerRef.current!;
+                  const sid = sessionIdRef.current;
+                  sched.resume(sid || null, turn.id, providerId);
+                } catch {}
+              }}
             />
           ) : null}
         </div>
@@ -1560,7 +1619,7 @@ ${modelOutputsBlock}`;
                 itemCount={messages.length}
                 itemSize={(index: number) => getItemSize(index)}
                 itemKey={(index: number) => messages[index]?.id || String(index)}
-                overscanCount={5}
+                overscanCount={3}
                 estimatedItemSize={160}
                 style={{ padding: '8px 0' }}
               >

@@ -20,6 +20,7 @@ interface ProviderResponseBlockProps {
   isLoading: boolean;
   currentAppStep: AppStep;
   isReducedMotion?: boolean;
+  onResumeProvider?: (providerId: string) => void;
 }
 
 const CopyButton = ({ text, label, onClick }: { text: string; label: string; onClick?: () => void }) => {
@@ -63,13 +64,19 @@ const ProviderResponseBlock = ({
   providerStates, 
   isLoading, 
   currentAppStep,
-  isReducedMotion = false
+  isReducedMotion = false,
+  onResumeProvider
 }: ProviderResponseBlockProps) => {
   // Convert providerResponses to legacy format if provided, otherwise use providerStates
   const effectiveProviderStates = providerResponses 
     ? Object.entries(providerResponses).reduce((acc, [providerId, response]) => {
+        const tail = (response.meta && typeof response.meta._tail === 'string') ? response.meta._tail : '';
+        const baseText = response.text || '';
+        const isStreaming = response.status === 'streaming';
+        // Show committed + tail visually, but do not persist tail outside of UI
+        const displayText = isStreaming && tail ? baseText : baseText;
         acc[providerId] = {
-          text: response.text,
+          text: displayText,
           status: response.status,
         };
         return acc;
@@ -183,9 +190,7 @@ const ProviderResponseBlock = ({
           borderRadius: '8px',
           border: '1px solid #334155'
         }}>
-          <div style={{ fontSize: '14px', fontWeight: 500, color: '#94a3b8' }}>
-            AI Responses ({Object.keys(filteredProviderStates).length})
-          </div>
+          <div style={{ fontSize: '14px', fontWeight: 500, color: '#94a3b8' }}>AI Responses ({Object.keys(filteredProviderStates).length})</div>
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
               onClick={handleExpandAll}
@@ -235,6 +240,10 @@ const ProviderResponseBlock = ({
             const provider = getProviderConfig(providerId);
             const isExpanded = expandedProviders[providerId];
             const isStreaming = state.status === 'streaming';
+            const pr = providerResponses?.[providerId];
+            const isPaused = !!(pr?.meta && pr.meta._paused);
+            const pending = (pr?.meta && typeof pr.meta._pending === 'number') ? pr.meta._pending : 0;
+            const tokens = (pr?.meta && typeof pr.meta.tokensUsed === 'number') ? pr.meta.tokensUsed : undefined;
 
             const transitionStyle = isReducedMotion ? {} : {
               transition: 'max-height 0.3s ease, background 0.2s ease'
@@ -317,6 +326,28 @@ const ProviderResponseBlock = ({
                     {isExpanded ? <ChevronUpIcon style={{ width: '12px', height: '12px' }} /> : <ChevronDownIcon style={{ width: '12px', height: '12px' }} />}
                     {isExpanded ? 'Collapse' : 'Expand'}
                   </button>
+                  {isPaused && (
+                    <button
+                      onClick={() => onResumeProvider?.(providerId)}
+                      title={`Resume updates (${pending} queued)`}
+                      style={{
+                        background: 'rgba(245, 158, 11, 0.15)',
+                        border: '1px solid rgba(245, 158, 11, 0.35)',
+                        borderRadius: '6px',
+                        padding: '4px 8px',
+                        color: '#f59e0b',
+                        fontSize: '12px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Resume ({pending})
+                    </button>
+                  )}
+                  {typeof tokens === 'number' && (
+                    <span title="Token usage" style={{ marginLeft: 'auto', fontSize: 11, color: '#94a3b8' }}>
+                      tokens: {tokens}
+                    </span>
+                  )}
                 </div>
 
                 {/* Content Area */}
