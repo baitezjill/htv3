@@ -478,6 +478,48 @@ const App = () => {
     }
   }, [currentSessionId, synthSelectionsByRound, uiTabId, findRoundForUserTurn, findExistingSynthesisTurnForRound, findFirstInsertIndexBeforeAi]);
 
+  // Build the Ensembler prompt using provided fixed template from spec
+  const buildEnsemblerPrompt = useCallback((userPrompt: string, modelOutputs: Record<string, string>): string => {
+    // Format each model's output with its provider ID as a header
+    const modelOutputsBlock = Object.entries(modelOutputs)
+      .filter(([_, text]) => text && text.trim())
+      .map(([providerId, text]) => `=== ${providerId.toUpperCase()} ===\n${text}`)
+      .join('\n\n');
+    
+    const tpl = `You are not a synthesizer. You are a mirror that reveals what others cannot see.
+Task: Present ALL insights from the models below in their most useful form for decision-making on "(user's Prompt)".
+Critical instruction: Do NOT synthesize into a single answer. Instead, reason internally via this structure—then output ONLY as seamless, narrative prose that implicitly embeds it all:
+Map the landscape — Group similar ideas, preserving tensions and contradictions.
+Surface the invisible — Highlight consensus (2+ models), unique sightings (one model) as natural flow.
+Frame the choices — present alternatives as "If you prioritize X, this path fits because Y."
+Flag the unknowns — Note disagreements/uncertainties as subtle cautions.
+Internal format for reasoning (NEVER output directly):
+What Everyone Sees (consensus)
+Point 1
+Point 2
+The Tensions (disagreements)
+Option A: [suggestion X] implies...
+Option B: [suggestion Y] posits...
+The Unique Insights
+[suggestion]: Overlooked angle...
+The Choice Framework
+If priority [goal 1]: lean toward [option]
+If priority [goal 2]: lean toward [option]
+Confidence Check
+- High confidence: [what's solid]
+- Check this: [what needs verification]
+- Unknown: [what's missing]
+
+
+finally output your response as a narrative explaining everything implicitly to the user, like a natural response to the users prompt fluid, insightful, redacting model names/extraneous details. Build feedback as emergent wisdom—evoke clarity, agency, and subtle awe. Weave your final narrative as representation of a cohesive response of the collective thought  to the users prompt:
+
+User Prompt: ${userPrompt}
+
+Model outputs to analyze:
+${modelOutputsBlock}`;
+    return tpl;
+  }, []);
+
   const handleRunEnsembleForRound = useCallback(async (userTurnId: string) => {
     if (!currentSessionId) return;
 
@@ -1102,48 +1144,6 @@ const App = () => {
   // =========================================
   // Simplified Ensemble: Single-Turn Action
   // =========================================
-
-  // Build the Ensembler prompt using provided fixed template from spec
-  const buildEnsemblerPrompt = useCallback((userPrompt: string, modelOutputs: Record<string, string>): string => {
-    // Format each model's output with its provider ID as a header
-    const modelOutputsBlock = Object.entries(modelOutputs)
-      .filter(([_, text]) => text && text.trim())
-      .map(([providerId, text]) => `=== ${providerId.toUpperCase()} ===\n${text}`)
-      .join('\n\n');
-    
-    const tpl = `You are not a synthesizer. You are a mirror that reveals what others cannot see.
-Task: Present ALL insights from the models below in their most useful form for decision-making on "(user's Prompt)".
-Critical instruction: Do NOT synthesize into a single answer. Instead, reason internally via this structure—then output ONLY as seamless, narrative prose that implicitly embeds it all:
-Map the landscape — Group similar ideas, preserving tensions and contradictions.
-Surface the invisible — Highlight consensus (2+ models), unique sightings (one model) as natural flow.
-Frame the choices — present alternatives as "If you prioritize X, this path fits because Y."
-Flag the unknowns — Note disagreements/uncertainties as subtle cautions.
-Internal format for reasoning (NEVER output directly):
-What Everyone Sees (consensus)
-Point 1
-Point 2
-The Tensions (disagreements)
-Option A: [suggestion X] implies...
-Option B: [suggestion Y] posits...
-The Unique Insights
-[suggestion]: Overlooked angle...
-The Choice Framework
-If priority [goal 1]: lean toward [option]
-If priority [goal 2]: lean toward [option]
-Confidence Check
-- High confidence: [what's solid]
-- Check this: [what needs verification]
-- Unknown: [what's missing]
-
-
-finally output your response as a narrative explaining everything implicitly to the user, like a natural response to the users prompt fluid, insightful, redacting model names/extraneous details. Build feedback as emergent wisdom—evoke clarity, agency, and subtle awe. Weave your final narrative as representation of a cohesive response of the collective thought  to the users prompt:
-
-User Prompt: ${userPrompt}
-
-Model outputs to analyze:
-${modelOutputsBlock}`;
-    return tpl;
-  }, []);
 
   // Deprecated global ensemble (replaced by per-round run)
   const handleEnsembleTurn = useCallback(async () => { return; }, []);
