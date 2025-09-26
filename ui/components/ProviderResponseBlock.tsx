@@ -73,8 +73,8 @@ const ProviderResponseBlock = ({
         const tail = (response.meta && typeof response.meta._tail === 'string') ? response.meta._tail : '';
         const baseText = response.text || '';
         const isStreaming = response.status === 'streaming';
-        // Show committed + tail visually, but do not persist tail outside of UI
-        const displayText = isStreaming && tail ? baseText : baseText;
+        // Display committed text only; tail is rendered via streaming dots to reduce flicker
+        const displayText = baseText;
         acc[providerId] = {
           text: displayText,
           status: response.status,

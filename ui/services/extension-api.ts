@@ -154,6 +154,7 @@ export interface ExtensionApi {
   getSessionContexts(): Record<string, any>;
   clearSession(sessionId?: string): void;
   getAllContexts(): Record<string, Record<string, any>>;
+  saveSession(sessionId: string): Promise<void>;
 }
 
 const api: ExtensionApi = {
@@ -568,6 +569,15 @@ const api: ExtensionApi = {
 
   getAllContexts(): Record<string, Record<string, any>> {
     return contextTracker.getAllContexts();
+  },
+
+  async saveSession(sessionId: string): Promise<void> {
+    try {
+      const port = await this.ensurePort({ sessionId });
+      port.postMessage({ type: 'save_session', sessionId });
+    } catch (e) {
+      console.warn('[ExtensionAPI] saveSession failed or no backend listener', e);
+    }
   },
 };
 

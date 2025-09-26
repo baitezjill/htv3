@@ -115,10 +115,12 @@ const App = () => {
     schedulerRef.current = new StreamingScheduler({
       maxUpdatesPerFrame: 4,
       onApply: (key, snapshot: SchedulerSnapshot) => {
-        // Key format: `${sessionId}:${roundId}:${providerId}`
+        // Key format (encoded): `${enc(sessionId||'null')}:${enc(roundId)}:${enc(providerId)}`
         const parts = key.split(':');
-        const roundId = parts[1];
-        const providerId = parts[2];
+        if (parts.length < 3) return;
+        const encSession = parts[0];
+        const roundId = decodeURIComponent(parts[1]);
+        const providerId = decodeURIComponent(parts[2]);
         if (!roundId || !providerId) return;
         setMessages(prev => {
           const idx = prev.findIndex(t => t.type === 'ai' && (t as AiTurn).id === roundId);
@@ -126,7 +128,8 @@ const App = () => {
           const updated = [...prev];
           const aiTurn = { ...(updated[idx] as AiTurn) } as AiTurn;
           const existing = aiTurn.providerResponses?.[providerId] || { providerId, text: '', status: 'pending', createdAt: Date.now() } as ProviderResponse;
-          const newText = snapshot.committedText + snapshot.tailText; // UI shows both, but tail is transient
+          // Stable merge: do not lose previously committed text; snapshot.committedText is authoritative
+          const newText = snapshot.committedText + snapshot.tailText; // render committed+tail
           const newStatus: ProviderResponse['status'] = snapshot.isFinal ? 'completed' : 'streaming';
           aiTurn.providerResponses = {
             ...(aiTurn.providerResponses || {}),
@@ -162,6 +165,7 @@ const App = () => {
         persistenceService.flush?.();
         // Disconnect port to cleanup connections
         try { api.disconnectPort?.(); } catch {}
+        try { schedulerRef.current?.dispose(); } catch {}
       } catch (e) {
         console.error('Shutdown save failed:', e);
       }
@@ -180,6 +184,7 @@ const App = () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       try { api.disconnectPort?.(); } catch {}
+      try { schedulerRef.current?.dispose(); } catch {}
     };
   }, []);
 
@@ -820,6 +825,11 @@ ${modelOutputsBlock}`;
     bootstrapFromPersistence();
   }, []);
 
+  // Clear scheduler state when switching sessions to avoid cross-session bleed
+  useEffect(() => {
+    try { schedulerRef.current?.clearForSession(currentSessionId || null); } catch {}
+  }, [currentSessionId]);
+
   // Extension API initialization
   useEffect(() => {
     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
@@ -960,6 +970,10 @@ ${modelOutputsBlock}`;
             sched.enqueue(sid, activeId, providerId, text, meta);
           }
           sched.markCompleted(sid, activeId, providerId);
+          // Ask backend to persist once per provider completion
+          if (sessionIdRef.current) {
+            try { api.saveSession(sessionIdRef.current); } catch {}
+          }
         }
       };
 

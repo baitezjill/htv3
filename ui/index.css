@@ -135,5 +135,5 @@ footer {
 }
 
 .providers-layer {
-  grid-template-columns: repeat(auto-fit, minmax(var(--provider-column-min-width), 1fr)) !important;
+  grid-template-columns: repeat(auto-fit, minmax(var(--provider-column-min-width), 1fr));
 }

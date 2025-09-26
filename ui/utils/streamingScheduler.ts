@@ -1,4 +1,4 @@
-type ProviderKey = string; // `${sessionId}:${roundId}:${providerId}`
+type ProviderKey = string; // `${encodeURIComponent(sessionId||'null')}:${encodeURIComponent(roundId)}:${encodeURIComponent(providerId)}`
 
 export interface EnqueuePayloadMeta {
   [key: string]: any;
@@ -51,7 +51,10 @@ export class StreamingScheduler {
   }
 
   private key(sessionId: string | null, roundId: string, providerId: string): ProviderKey {
-    return `${sessionId ?? 'null'}:${roundId}:${providerId}`;
+    const s = encodeURIComponent(sessionId ?? 'null');
+    const r = encodeURIComponent(roundId);
+    const p = encodeURIComponent(providerId);
+    return `${s}:${r}:${p}`;
   }
 
   enqueue(sessionId: string | null, roundId: string, providerId: string, deltaText: string, meta?: EnqueuePayloadMeta) {
@@ -90,9 +93,9 @@ export class StreamingScheduler {
     this.markDirty(k);
   }
 
-  clearForSession(sessionId: string) {
+  clearForSession(sessionId: string | null) {
     // Remove all entries for a session
-    const prefix = `${sessionId}:`;
+    const prefix = `${encodeURIComponent(sessionId ?? 'null')}:`;
     Array.from(this.states.keys()).forEach((k) => {
       if (k.startsWith(prefix)) {
         this.states.delete(k);
@@ -189,6 +192,13 @@ export class StreamingScheduler {
       processed++;
       this.apply(key, st, st.completed);
 
+      // If completed and fully flushed, cleanup state to avoid memory growth
+      if (st.completed && st.tailText.length === 0 && st.queue.length === 0) {
+        this.states.delete(key);
+        // debug hook to aid diagnostics without being noisy
+        try { console.debug?.('[StreamingScheduler] cleaned key', key); } catch {}
+      }
+
       // If still pending or paused and not completed, schedule another frame
       if ((st.queue.length > 0 && !st.paused) || st.tailText.length > 0 || (!st.completed && this.dirtyKeys.size > 0)) {
         // keep RAF alive
@@ -204,6 +214,15 @@ export class StreamingScheduler {
         this.rafId = requestAnimationFrame(() => this.flush());
       }
     }
+  }
+
+  dispose() {
+    if (this.rafId != null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    this.states.clear();
+    this.dirtyKeys.clear();
   }
 }
 
