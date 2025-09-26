@@ -7,3 +7,6 @@ shared/docs/
 node_modules/
 /dist
 package-lock.json
+/tsconfig.tsbuildinfo
+/tsconfig
+build-esbuild.log
