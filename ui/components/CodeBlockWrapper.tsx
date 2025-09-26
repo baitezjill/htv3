@@ -115,3 +115,4 @@ export const CodeBlockWrapper = ({ children, className = '', style }: CodeBlockW
 
   return <div className={className} style={style}>{parts}</div>;
 };
+

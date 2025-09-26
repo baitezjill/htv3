@@ -470,7 +470,6 @@ const App = () => {
     activeAiTurnIdRef.current = synthTurnId;
     setIsLoading(true);
     setUiPhase('streaming');
-    setCurrentAppStep('synthesis');
     isSynthRunningRef.current = true;
 
     const originalPrompt = round.user.text || '';
@@ -560,7 +559,6 @@ ${modelOutputsBlock}`;
 
     setIsLoading(true);
     setUiPhase('streaming');
-    setCurrentAppStep('synthesis');
 
     const existing = findExistingEnsembleTurnForRound(userTurnId);
     const aiTurnId = existing?.turn.id || `ai-ensemble-${userTurnId}`;
@@ -1101,8 +1099,8 @@ ${modelOutputsBlock}`;
     const providerIds = LLM_PROVIDERS_CONFIG.filter((p: LLMProvider) => selectedModels[p.id]).map(p => p.id);
     if (providerIds.length === 0) return;
 
-    setCurrentAppStep('initial');
     setIsLoading(true);
+    setCurrentAppStep('initial');
 
     // 1. Push user turn
     const userTurn: UserTurn = {
