@@ -11,10 +11,9 @@ interface AiTurnBlockProps {
   isLive?: boolean;
   isReducedMotion?: boolean;
   currentAppStep?: AppStep;
+  onResumeProvider?: (providerId: string) => void;
 }
-
-const AiTurnBlock = ({ aiTurn, isLive = false, isReducedMotion = false, currentAppStep }: AiTurnBlockProps) => {
-  return (
+ return (
     <div className="ai-turn-block" style={{
       background: 'rgba(30, 41, 59, 0.6)',
       border: '1px solid #334155',
@@ -91,6 +90,7 @@ const AiTurnBlock = ({ aiTurn, isLive = false, isReducedMotion = false, currentA
           isLoading={isLive}
           currentAppStep={currentAppStep || (isLive ? 'awaitingSynthesis' : 'synthesisDone')}
           isReducedMotion={isReducedMotion}
+          onResumeProvider={onResumeProvider}
         />
       )}
 
