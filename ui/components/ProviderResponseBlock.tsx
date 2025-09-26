@@ -1,4 +1,4 @@
-import { LLMProvider, ProviderResponse } from '../types';
+import { LLMProvider, AppStep, ProviderResponse } from '../types';
 import { LLM_PROVIDERS_CONFIG } from '../constants';
 import { BotIcon, ChevronDownIcon, ChevronUpIcon } from './Icons';
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -18,6 +18,7 @@ interface ProviderResponseBlockProps {
   // Legacy prop for backward compatibility
   providerStates?: ProviderStates;
   isLoading: boolean;
+  currentAppStep: AppStep;
   isReducedMotion?: boolean;
 }
 
@@ -61,6 +62,7 @@ const ProviderResponseBlock = ({
   providerResponses,
   providerStates, 
   isLoading, 
+  currentAppStep,
   isReducedMotion = false
 }: ProviderResponseBlockProps) => {
   // Convert providerResponses to legacy format if provided, otherwise use providerStates

@@ -9,6 +9,9 @@
 
 // import type React from 'react';
 
+/** The current step of the UI, controlling what controls are shown */
+export type AppStep = 'initial' | 'awaitingSynthesis' | 'synthesis' | 'synthesisDone';
+
 /** Defines the allowed LLM providers for the synthesis step */
 export type SynthesisProvider = 'claude' | 'gemini' | 'chatgpt';
 

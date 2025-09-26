@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { VariableSizeList as List, ListChildComponentProps } from 'react-window';
 import React from 'react';
-import { TurnMessage, UserTurn, AiTurn, ProviderResponse, ChatSession, BackendMessage, LLMProvider, isUserTurn, isAiTurn, UiPhase, BackendFullSession } from './types';
+import { TurnMessage, UserTurn, AiTurn, ProviderResponse, AppStep, ChatSession, BackendMessage, LLMProvider, isUserTurn, isAiTurn, UiPhase, BackendFullSession } from './types';
 import { LLM_PROVIDERS_CONFIG, EXAMPLE_PROMPT } from './constants';
 import UserTurnBlock from './components/UserTurnBlock';
 import AiTurnBlock from './components/AiTurnBlock';
@@ -68,6 +68,7 @@ const App = () => {
   const [historySessions, setHistorySessions] = useState<ChatSession[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [showWelcome, setShowWelcome] = useState(true);
+  const [currentAppStep, setCurrentAppStep] = useState<AppStep>('initial');
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [uiTabId, setUiTabId] = useState<number | undefined>();
   const [uiPhase, setUiPhase] = useState<UiPhase>('idle');
@@ -173,6 +174,9 @@ const App = () => {
       if (allComplete) {
         setIsLoading(false);
         setUiPhase('awaiting_action');
+        const isEnsemble = updatedAiTurn.isEnsembleAnswer;
+        const isSynthesis = updatedAiTurn.isSynthesisAnswer;
+        setCurrentAppStep(isEnsemble || isSynthesis ? 'synthesisDone' : 'awaitingSynthesis');
         setIsContinuationMode(true);
         activeAiTurnIdRef.current = null;
         
@@ -227,6 +231,9 @@ const App = () => {
       if (allComplete) {
         setIsLoading(false);
         setUiPhase('awaiting_action');
+        const isEnsemble = updatedAiTurn.isEnsembleAnswer;
+        const isSynthesis = updatedAiTurn.isSynthesisAnswer;
+        setCurrentAppStep(isEnsemble || isSynthesis ? 'synthesisDone' : 'awaitingSynthesis');
         setIsContinuationMode(true);
         activeAiTurnIdRef.current = null;
       }
@@ -748,6 +755,7 @@ ${modelOutputsBlock}`;
         }, {} as Record<string, boolean>);
         
         setShowWelcome(true);
+        setCurrentAppStep('initial');
         setCurrentSessionId(null);
         setMessages([]);
         setIsHistoryPanelOpen(false);
@@ -788,6 +796,7 @@ ${modelOutputsBlock}`;
           setIsLoading(false);
           setUiPhase('awaiting_action');
           setIsContinuationMode(true);
+          setCurrentAppStep('awaitingSynthesis');
         }
       };
       
@@ -1003,6 +1012,7 @@ ${modelOutputsBlock}`;
     setIsLoading(true);
     setUiPhase('streaming');
     if (showWelcome) setShowWelcome(false);
+    setCurrentAppStep('initial');
     setModelsTouched(true);
 
     const activeProviders = LLM_PROVIDERS_CONFIG.filter((p: LLMProvider) => selectedModels[p.id]);
@@ -1090,6 +1100,7 @@ ${modelOutputsBlock}`;
     if (providerIds.length === 0) return;
 
     setIsLoading(true);
+    setCurrentAppStep('initial');
 
     // 1. Push user turn
     const userTurn: UserTurn = {
@@ -1173,6 +1184,7 @@ ${modelOutputsBlock}`;
 
   const handleNewChat = useCallback(async () => {
     setMessages([]);
+    setCurrentAppStep('initial');
     setIsLoading(false);
     setCurrentSessionId(null);
     setIsHistoryPanelOpen(false);
@@ -1242,12 +1254,15 @@ ${modelOutputsBlock}`;
       setShowWelcome(false);
       // Determine app step
       if (loadedMessages.length === 0) {
+        setCurrentAppStep('initial');
         setIsContinuationMode(false);
       } else {
         const lastTurn = loadedMessages[loadedMessages.length - 1];
         if (lastTurn.type === 'ai') {
+          setCurrentAppStep('awaitingSynthesis');
           setIsContinuationMode(true);
         } else {
+          setCurrentAppStep('initial');
           const hasAiTurn = loadedMessages.some(t => t.type === 'ai');
           setIsContinuationMode(hasAiTurn);
         }
@@ -1265,6 +1280,7 @@ ${modelOutputsBlock}`;
     } catch (error) {
       console.error('Error loading session:', error);
       setMessages([]);
+      setCurrentAppStep('initial');
       setIsContinuationMode(false);
     } finally {
       setIsLoading(false);
@@ -1295,6 +1311,7 @@ ${modelOutputsBlock}`;
         setCurrentSessionId(null);
         setShowWelcome(true);
         setIsContinuationMode(false);
+        setCurrentAppStep('initial');
         activeAiTurnIdRef.current = null;
         setPendingUserTurns(new Map());
       }
@@ -1343,7 +1360,7 @@ ${modelOutputsBlock}`;
       const ro = new ResizeObserver(() => measure());
       ro.observe(el);
       return () => ro.disconnect();
-    }, [index, turn && turn.id, expandedUserTurns[turn?.id || ''] , isReducedMotion]);
+    }, [index, turn && turn.id, expandedUserTurns[turn?.id || ''] , isReducedMotion, currentAppStep]);
 
     if (turn && isUserTurn(turn)) {
       const { synthMap, ensembleMap, disableSynthesisRun, disableEnsembleRun } = buildEligibleMapForRound(turn.id);
@@ -1378,6 +1395,7 @@ ${modelOutputsBlock}`;
               aiTurn={turn as AiTurn}
               isLive={turn.id === activeAiTurnIdRef.current}
               isReducedMotion={isReducedMotion}
+              currentAppStep={currentAppStep}
             />
           ) : null}
         </div>

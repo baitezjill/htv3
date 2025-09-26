@@ -1,4 +1,4 @@
-import { AiTurn } from '../types';
+import { AiTurn, ProviderResponse, AppStep } from '../types';
 import { BotIcon } from './Icons';
 import ProviderResponseBlock from './ProviderResponseBlock';
 import { useState } from 'react';
@@ -10,9 +10,10 @@ interface AiTurnBlockProps {
   aiTurn: AiTurn;
   isLive?: boolean;
   isReducedMotion?: boolean;
+  currentAppStep?: AppStep;
 }
 
-const AiTurnBlock = ({ aiTurn, isLive = false, isReducedMotion = false }: AiTurnBlockProps) => {
+const AiTurnBlock = ({ aiTurn, isLive = false, isReducedMotion = false, currentAppStep }: AiTurnBlockProps) => {
   return (
     <div className="ai-turn-block" style={{
       background: 'rgba(30, 41, 59, 0.6)',
@@ -88,14 +89,17 @@ const AiTurnBlock = ({ aiTurn, isLive = false, isReducedMotion = false }: AiTurn
         <ProviderResponseBlock
           providerResponses={aiTurn.providerResponses}
           isLoading={isLive}
+          currentAppStep={currentAppStep || (isLive ? 'awaitingSynthesis' : 'synthesisDone')}
           isReducedMotion={isReducedMotion}
         />
       )}
 
       {/* Round-level action bar is rendered under UserTurnBlock now */}
 
-      {/* Synthesis Response - Only show when not live streaming to avoid duplication */}
-      {aiTurn.synthesisResponse && !isLive && (
+      {/* Synthesis Response - Only show inside turn when finalized, to avoid duplication with sticky overlay */}
+      {aiTurn.synthesisResponse && (
+        (!isLive || currentAppStep === 'synthesis' || currentAppStep === 'synthesisDone')
+      ) && (
         <div
           className="synthesis-section"
           style={{
