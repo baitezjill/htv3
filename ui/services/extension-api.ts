@@ -26,7 +26,7 @@ interface BackendApiResponse<T> {
 }
 
 let EXTENSION_ID: string | null = null;
-let activePort: chrome.runtime.Port | null = null;
+let activePort: any | null = null;
 let activeListener: ((message: any) => void) | null = null;
 
 // Stable UI instance identity for reconnect handshakes (stub for future use)
@@ -96,8 +96,8 @@ export interface ExtensionApi {
   setExtensionId(id: string): void;
   queryBackend<T>(message: { type: string; payload?: any }): Promise<T>;
   dispatchWorkflow(workflow: WorkflowRequest): void;
-  createPort(): chrome.runtime.Port;
-  ensurePort(options?: { sessionId?: string; onReconnectAck?: (msg: any) => void; timeoutMs?: number; }): Promise<chrome.runtime.Port>;
+  createPort(): any;
+  ensurePort(options?: { sessionId?: string; onReconnectAck?: (msg: any) => void; timeoutMs?: number; }): Promise<any>;
   executeBatchPrompt(
     prompt: string,
     providers: LLMProvider[],
@@ -105,22 +105,15 @@ export interface ExtensionApi {
     uiTabId?: number,
     onMessage?: (message: any) => void,
     sessionId?: string
-  ): { sessionId: string; port: chrome.runtime.Port };
+  ): { sessionId: string; port: any };
   executeSynthesis(
     sessionId: string,
     originalPrompt: string,
     allBatchResults: Record<string, string>,
     synthesisProviders: ('claude' | 'gemini' | 'chatgpt') | Array<'claude' | 'gemini' | 'chatgpt'>,
     uiTabId?: number,
-    options?: { idempotencyToken?: string; hidden?: boolean }
+    options?: { idempotencyToken?: string }
   ): Promise<void>;
-  hiddenBatchExecute(
-    prompt: string,
-    providers: LLMProvider[],
-    uiTabId?: number,
-    onMessage?: (message: any) => void,
-    sessionId?: string
-  ): { sessionId: string; port: chrome.runtime.Port };
   executeEnsembler(args: {
     sessionId: string;
     userPrompt: string;
@@ -139,7 +132,7 @@ export interface ExtensionApi {
     options?: { idempotencyToken?: string };
   }): Promise<void>;
   disconnectPort(): void;
-  getActivePort(): chrome.runtime.Port | null;
+  getActivePort(): any | null;
   getHistoryList(): Promise<HistoryApiResponse>;
   getHistorySession(sessionId: string): Promise<ChatSession>;
   deleteBackgroundSession(sessionId: string): Promise<{ removed: boolean }>;
@@ -209,7 +202,7 @@ const api: ExtensionApi = {
   /**
    * Creates a persistent port connection for streaming communication
    */
-  createPort(): chrome.runtime.Port {
+  createPort(): any {
     if (!EXTENSION_ID) {
       throw new Error("Extension not connected. Cannot create port.");
     }
@@ -231,7 +224,8 @@ const api: ExtensionApi = {
     }
     
     // Create new persistent connection
-    activePort = chrome.runtime.connect(EXTENSION_ID, { name: "htos-popup" });
+    // @ts-ignore chrome.runtime.connect is available in extension context
+    activePort = (chrome.runtime as any).connect(EXTENSION_ID, { name: "htos-popup" });
     activePort.onDisconnect.addListener(() => {
       activePort = null;
       activeListener = null;
@@ -247,11 +241,11 @@ const api: ExtensionApi = {
     sessionId?: string;
     onReconnectAck?: (msg: any) => void;
     timeoutMs?: number;
-  }): Promise<chrome.runtime.Port> {
+  }): Promise<any> {
     console.log('[ExtensionAPI DEBUG] Entered ensurePort');
     const timeoutMs = options?.timeoutMs ?? 3000;
     // Create or reuse
-    let port: chrome.runtime.Port;
+    let port: any;
     try {
       port = this.createPort();
     } catch (e) {
@@ -320,7 +314,7 @@ const api: ExtensionApi = {
     uiTabId?: number,
     onMessage?: (message: any) => void,
     sessionId?: string
-  ): { sessionId: string; port: chrome.runtime.Port } {
+  ): { sessionId: string; port: any } {
     const sid = sessionId || `sid-${Date.now()}`;
     
     // Create persistent port connection
@@ -360,7 +354,7 @@ const api: ExtensionApi = {
     allBatchResults: Record<string, string>,
     synthesisProviders: ("claude" | "gemini" | "chatgpt") | Array<"claude" | "gemini" | "chatgpt">,
     uiTabId?: number,
-    options?: { idempotencyToken?: string; hidden?: boolean }
+    options?: { idempotencyToken?: string }
   ): Promise<void> {
     // Ensure we have a port; perform reconnect handshake if needed
     const port = await this.ensurePort({ sessionId });
@@ -375,8 +369,7 @@ const api: ExtensionApi = {
         allBatchResults,
         providers,
         uiTabId,
-        idempotencyToken: options?.idempotencyToken,
-        hidden: options?.hidden === true,
+        idempotencyToken: options?.idempotencyToken
       });
       console.log("[ExtensionAPI] Sent batch synthesis request via port:", { sessionId, providers });
     } else {
@@ -390,42 +383,10 @@ const api: ExtensionApi = {
         provider: synthesisProvider,
         synthesisProvider,
         uiTabId,
-        idempotencyToken: options?.idempotencyToken,
-        hidden: options?.hidden === true,
+        idempotencyToken: options?.idempotencyToken
       });
       console.log("[ExtensionAPI] Sent synthesis request via port:", { sessionId, synthesisProvider });
     }
-  },
-
-  /**
-   * Hidden Round 1: hiddenBatchExecute — fan-out the prompt but mark as hidden so UI won't render.
-   */
-  hiddenBatchExecute(
-    prompt: string,
-    providers: LLMProvider[],
-    uiTabId?: number,
-    onMessage?: (message: any) => void,
-    sessionId?: string
-  ): { sessionId: string; port: chrome.runtime.Port } {
-    const sid = sessionId || `sid-${Date.now()}`;
-    const port = this.createPort();
-    if (onMessage) {
-      if (activeListener) {
-        try { port.onMessage.removeListener(activeListener); } catch (e) { console.warn('[ExtensionAPI] Failed to remove old listener', e); }
-      }
-      port.onMessage.addListener(onMessage);
-      activeListener = onMessage;
-    }
-    port.postMessage({
-      type: "hiddenBatchExecute",
-      prompt,
-      providers: providers.map((p) => p.id),
-      sessionId: sid,
-      uiTabId,
-      hidden: true,
-    });
-    console.log("[ExtensionAPI] Sent hiddenBatchExecute via port:", { sessionId: sid, providers: providers.map(p => p.id) });
-    return { sessionId: sid, port };
   },
 
   /**
@@ -512,7 +473,7 @@ const api: ExtensionApi = {
   /**
    * Gets the current active port
    */
-  getActivePort(): chrome.runtime.Port | null {
+  getActivePort(): any | null {
     return activePort;
   },
 
