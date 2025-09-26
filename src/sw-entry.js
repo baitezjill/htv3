@@ -603,7 +603,8 @@ class FaultTolerantOrchestrator {
       onPartial = () => {},
       onProviderComplete = () => {},
       onError = () => {},
-      onAllComplete = () => {}
+      onAllComplete = () => {},
+      useThinking = false
     } = options;
 
     console.log(`[FaultTolerantOrchestrator] Starting parallel fanout for ${providers.length} providers`);
@@ -627,7 +628,8 @@ class FaultTolerantOrchestrator {
       results,
       errors,
       abortControllers,
-      startTime: Date.now()
+      startTime: Date.now(),
+      useThinking: Boolean(useThinking)
     });
 
     // Create individual abort controllers for each provider
@@ -790,10 +792,26 @@ class FaultTolerantOrchestrator {
       const providerContext = ((sessionManager && typeof sessionManager.getProviderContexts === 'function')
         ? (sessionManager.getProviderContexts(sessionId)?.[providerId] || {})
         : {});
+
+      // Resolve final useThinking flag: provider-specific meta > active request opt > session-level
+      let resolvedUseThinking = false;
+      try {
+        const session = sessionManager.getOrCreateSession(sessionId);
+        const active = this.activeRequests.get(sessionId) || {};
+        resolvedUseThinking = (providerContext?.meta?.useThinking !== undefined)
+          ? Boolean(providerContext.meta.useThinking)
+          : (active.useThinking !== undefined ? Boolean(active.useThinking) : Boolean(session?.useThinking));
+      } catch (e) {
+        resolvedUseThinking = !!(providerContext?.meta?.useThinking);
+      }
+
       const request = {
         originalPrompt: prompt,
         sessionId,
-        meta: (providerContext?.meta || providerContext || {})
+        meta: {
+          ...(providerContext?.meta || providerContext || {}),
+          useThinking: resolvedUseThinking
+        }
       };
 
       // Execute with fault isolation
@@ -969,7 +987,7 @@ chrome.runtime.onConnect.addListener((port) => {
       // Hidden batch flow removed
 
       if (message.type === "sendPrompt") {
-        const { prompt, providers, sessionId } = message;
+        const { prompt, providers, sessionId, useThinking } = message;
         console.log(`[HTOS] Processing prompt for ${providers.length} providers`);
 
         // Validate providers
@@ -1006,7 +1024,9 @@ chrome.runtime.onConnect.addListener((port) => {
         // Ensure session state exists before starting the fanout so callbacks
         // can immediately merge contexts and logs have a target session.
         try {
-          sessionManager.getOrCreateSession(capturedSessionId);
+          const session = sessionManager.getOrCreateSession(capturedSessionId);
+          // Persist the useThinking preference on the session so continuations can honor it
+          try { session.useThinking = Boolean(useThinking); } catch(_) {}
         } catch (e) {
           console.warn('[HTOS] Failed to create session before fanout', e);
         }
@@ -1017,6 +1037,7 @@ chrome.runtime.onConnect.addListener((port) => {
           availableProviders,
           {
             sessionId: capturedSessionId,
+            useThinking: Boolean(useThinking),
              onAllComplete: (resultsMap, errorsMap) => {
                try {
                  // Mark round completion (don't save yet, will be handled by the final save)
@@ -1907,13 +1928,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               onPartial: (_pid, chunk) => {
                 try {
                   if (chunk && chunk.partial) {
-                    const delta = makeDelta(sessionId, synthesisProvider, chunk.text || "");
-                    if (delta) {
-                      port.postMessage({
-                        type: "SYNTHESIS_PARTIAL",
-                        sessionId,
-                        payload: { provider: synthesisProvider, text: delta },
-                      });
+                    if (true) {
+                      const delta = makeDelta(sessionId, synthesisProvider, chunk.text || "");
+                      if (delta) {
+                        port.postMessage({
+                          type: "SYNTHESIS_PARTIAL",
+                          sessionId,
+                          provider: synthesisProvider,
+                          text: delta,
+                          payload: { provider: synthesisProvider, text: delta },
+                        });
+                      }
                     }
                   }
                 } catch (e) {
@@ -1926,7 +1951,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             try { console.log('[HTOS] Synthesis result meta', { sessionId, synthesisProvider, meta: s?.meta }); } catch {}
 
             // Persist provider context for potential continuation or subsequent synthesis
-            sessionManager.updateProviderContext(sessionId, synthesisProvider, { text: s?.text || "", meta: s?.meta || {} }, true, { skipSave: true });
+            try { sessionManager.updateProviderContext(sessionId, synthesisProvider, { text: s?.text || "", meta: s?.meta || {} }, true, { skipSave: true }); } catch {}
 
             // Final synthesis completion over the port
             chrome.runtime.sendMessage({
