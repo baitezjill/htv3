@@ -5,9 +5,12 @@ interface ModelTrayProps {
   selectedModels: Record<string, boolean>;
   onToggleModel: (providerId: string) => void;
   isLoading?: boolean;
+  // Think-mode (global) toggle for ChatGPT
+  thinkOnChatGPT?: boolean;
+  onToggleThinkChatGPT?: () => void;
 }
 
-const ModelTray = ({ selectedModels, onToggleModel, isLoading = false }: ModelTrayProps) => {
+const ModelTray = ({ selectedModels, onToggleModel, isLoading = false, thinkOnChatGPT = false, onToggleThinkChatGPT }: ModelTrayProps) => {
   return (
     <div
       className="model-tray"
@@ -106,6 +109,32 @@ const ModelTray = ({ selectedModels, onToggleModel, isLoading = false }: ModelTr
           </button>
         );
       })}
+      {/* Global Think toggle for ChatGPT */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '8px' }}>
+        <button
+          onClick={() => !isLoading && onToggleThinkChatGPT?.()}
+          disabled={isLoading}
+          title={`Think mode for ChatGPT ${thinkOnChatGPT ? 'ON' : 'OFF'}`}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '6px 10px',
+            background: thinkOnChatGPT ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+            border: `1px solid ${thinkOnChatGPT ? 'rgba(99, 102, 241, 0.4)' : 'rgba(255, 255, 255, 0.1)'}`,
+            borderRadius: '999px',
+            color: thinkOnChatGPT ? '#a5b4fc' : '#64748b',
+            fontSize: '12px',
+            cursor: isLoading ? 'not-allowed' : 'pointer',
+            transition: 'all 0.2s ease',
+            opacity: isLoading ? 0.6 : 1,
+          }}
+        >
+          <span style={{ fontSize: '14px' }}>🤔</span>
+          <span>Think (ChatGPT)</span>
+          <span style={{ fontSize: '10px', opacity: thinkOnChatGPT ? 1 : 0.7 }}>{thinkOnChatGPT ? 'ON' : 'OFF'}</span>
+        </button>
+      </div>
       
       {/* Active Count Indicator */}
       <div

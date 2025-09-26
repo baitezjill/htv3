@@ -104,7 +104,8 @@ export interface ExtensionApi {
     isVisible: boolean,
     uiTabId?: number,
     onMessage?: (message: any) => void,
-    sessionId?: string
+    sessionId?: string,
+    useThinking?: boolean
   ): { sessionId: string; port: any };
   executeSynthesis(
     sessionId: string,
@@ -112,7 +113,7 @@ export interface ExtensionApi {
     allBatchResults: Record<string, string>,
     synthesisProviders: ('claude' | 'gemini' | 'chatgpt') | Array<'claude' | 'gemini' | 'chatgpt'>,
     uiTabId?: number,
-    options?: { idempotencyToken?: string }
+    options?: { idempotencyToken?: string; useThinking?: boolean }
   ): Promise<void>;
   executeEnsembler(args: {
     sessionId: string;
@@ -121,7 +122,7 @@ export interface ExtensionApi {
     ensemblerProvider: string; // default 'claude'
     ensemblerPrompt: string; // exact prompt provided by UI
     uiTabId?: number;
-    options?: { idempotencyToken?: string };
+    options?: { idempotencyToken?: string; useThinking?: boolean };
   }): Promise<void>;
   executeContinuationPrompt(args: {
     prompt: string;
@@ -312,7 +313,8 @@ const api: ExtensionApi = {
     isVisible: boolean,
     uiTabId?: number,
     onMessage?: (message: any) => void,
-    sessionId?: string
+    sessionId?: string,
+    useThinking?: boolean
   ): { sessionId: string; port: any } {
     const sid = sessionId || `sid-${Date.now()}`;
     
@@ -335,7 +337,9 @@ const api: ExtensionApi = {
       providers: providers.map(p => p.id),
       sessionId: sid,
       uiTabId,
-      executionMode: isVisible ? "visible" : "headless"
+      executionMode: isVisible ? "visible" : "headless",
+      // Forward Think-mode preference for this run (optional)
+      useThinking
     });
 
     console.log("[ExtensionAPI] Sent sendPrompt via port:", { sessionId: sid, providers: providers.map(p => p.id) });
@@ -353,7 +357,7 @@ const api: ExtensionApi = {
     allBatchResults: Record<string, string>,
     synthesisProviders: ("claude" | "gemini" | "chatgpt") | Array<"claude" | "gemini" | "chatgpt">,
     uiTabId?: number,
-    options?: { idempotencyToken?: string }
+    options?: { idempotencyToken?: string; useThinking?: boolean }
   ): Promise<void> {
     // Ensure we have a port; perform reconnect handshake if needed
     const port = await this.ensurePort({ sessionId });
@@ -368,7 +372,8 @@ const api: ExtensionApi = {
         allBatchResults,
         providers,
         uiTabId,
-        idempotencyToken: options?.idempotencyToken
+        idempotencyToken: options?.idempotencyToken,
+        useThinking: options?.useThinking
       });
       console.log("[ExtensionAPI] Sent batch synthesis request via port:", { sessionId, providers });
     } else {
@@ -382,7 +387,8 @@ const api: ExtensionApi = {
         provider: synthesisProvider,
         synthesisProvider,
         uiTabId,
-        idempotencyToken: options?.idempotencyToken
+        idempotencyToken: options?.idempotencyToken,
+        useThinking: options?.useThinking
       });
       console.log("[ExtensionAPI] Sent synthesis request via port:", { sessionId, synthesisProvider });
     }
@@ -406,7 +412,7 @@ const api: ExtensionApi = {
     ensemblerProvider: string;
     ensemblerPrompt: string;
     uiTabId?: number;
-    options?: { idempotencyToken?: string };
+    options?: { idempotencyToken?: string; useThinking?: boolean };
   }): Promise<void> {
     console.log('[ExtensionAPI DEBUG] Entered executeEnsembler');
     const port = await this.ensurePort({ sessionId });
@@ -419,6 +425,7 @@ const api: ExtensionApi = {
       ensemblerPrompt,
       uiTabId,
       idempotencyToken: options?.idempotencyToken,
+      useThinking: options?.useThinking,
     });
     console.log("[ExtensionAPI] Sent ensemble_finalize via port:", { sessionId, ensemblerProvider });
   },
@@ -439,7 +446,7 @@ const api: ExtensionApi = {
     sessionId: string;
     providerContexts: Record<string, any>;
     uiTabId?: number;
-    options?: { idempotencyToken?: string };
+    options?: { idempotencyToken?: string; useThinking?: boolean };
   }): Promise<void> {
     // Ensure we have a port; perform reconnect handshake if needed
     const port = await this.ensurePort({ sessionId });
@@ -452,6 +459,7 @@ const api: ExtensionApi = {
       providerContexts,
       uiTabId,
       idempotencyToken: options?.idempotencyToken,
+      useThinking: options?.useThinking,
     });
     
     console.log("[ExtensionAPI] Sent continuation request via port:", { sessionId, providers, providerContexts });

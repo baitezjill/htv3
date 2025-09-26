@@ -10,11 +10,17 @@ interface TurnActionBarProps {
   synthSelected: Record<string, boolean>;
   onToggleSynth: (roundUserTurnId: string, providerId: string) => void;
   onRunSynthesis: (roundUserTurnId: string) => void;
+  // Think-mode toggle for ChatGPT synthesis
+  thinkSynthForChatGPT?: boolean;
+  onToggleThinkSynthForChatGPT?: (roundUserTurnId: string) => void;
 
   // Ensemble (single-select)
   ensembleSelected: string | null;
   onSelectEnsemble: (roundUserTurnId: string, providerId: string) => void;
   onRunEnsemble: (roundUserTurnId: string) => void;
+  // Think-mode toggle for ChatGPT ensemble
+  thinkEnsembleForChatGPT?: boolean;
+  onToggleThinkEnsembleForChatGPT?: (roundUserTurnId: string) => void;
 
   // Per-provider grey-out
   eligibleMap?: Record<string, { disabled: boolean; reason?: string }>;
@@ -39,6 +45,10 @@ const TurnActionBar = ({
   ensembleEligibleMap = {},
   disableSynthesisRun = false,
   disableEnsembleRun = false,
+  thinkSynthForChatGPT = false,
+  onToggleThinkSynthForChatGPT,
+  thinkEnsembleForChatGPT = false,
+  onToggleThinkEnsembleForChatGPT,
 }: TurnActionBarProps) => {
   const renderToggle = (
     pid: string,
@@ -98,6 +108,26 @@ const TurnActionBar = ({
           const title = block?.reason ? `${p.name}: ${block.reason}` : `Include ${p.name}`;
           return renderToggle(p.id, isSelected, () => onToggleSynth(roundUserTurnId, p.id), isDisabled, title);
         })}
+        {/* Think-mode toggle for ChatGPT synthesis */}
+        <button
+          onClick={() => onToggleThinkSynthForChatGPT?.(roundUserTurnId)}
+          disabled={isLoading}
+          title={`Think mode for ChatGPT ${thinkSynthForChatGPT ? 'ON' : 'OFF'}`}
+          style={{
+            padding: '6px 10px',
+            borderRadius: 999,
+            border: '1px solid #475569',
+            background: thinkSynthForChatGPT ? 'rgba(99,102,241,0.2)' : '#0f172a',
+            color: '#e2e8f0',
+            fontSize: 12,
+            cursor: isLoading ? 'not-allowed' : 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6
+          }}
+        >
+          🤔 ChatGPT Think: {thinkSynthForChatGPT ? 'ON' : 'OFF'}
+        </button>
         <div style={{ flex: 1 }} />
         <button
           onClick={() => onRunSynthesis(roundUserTurnId)}
@@ -133,6 +163,26 @@ const TurnActionBar = ({
             '#10b981'
           );
         })}
+        {/* Think-mode toggle for ChatGPT ensemble */}
+        <button
+          onClick={() => onToggleThinkEnsembleForChatGPT?.(roundUserTurnId)}
+          disabled={isLoading}
+          title={`Think mode for ChatGPT ${thinkEnsembleForChatGPT ? 'ON' : 'OFF'}`}
+          style={{
+            padding: '6px 10px',
+            borderRadius: 999,
+            border: '1px solid #475569',
+            background: thinkEnsembleForChatGPT ? 'rgba(99,102,241,0.2)' : '#0f172a',
+            color: '#e2e8f0',
+            fontSize: 12,
+            cursor: isLoading ? 'not-allowed' : 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6
+          }}
+        >
+          🤔 ChatGPT Think: {thinkEnsembleForChatGPT ? 'ON' : 'OFF'}
+        </button>
         <div style={{ flex: 1 }} />
         <button
           onClick={() => onRunEnsemble(roundUserTurnId)}
