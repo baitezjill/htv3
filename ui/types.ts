@@ -161,8 +161,6 @@ export interface AiTurn {
   isSynthesisAnswer?: boolean;
   // Optional metadata container; used for ensemble persistence flags and telemetry
   meta?: {
-    // Hidden artifacts persisted to history should be marked with this flag so the UI can filter
-    ensembleHidden?: boolean;
     // Summary of ensemble run used for badges/tooltips/history
     ensemble?: {
       providers: string[]; // selected synthesizers
@@ -226,48 +224,7 @@ export interface Round {
 // Ensemble UI State (authoritative; maintained in App.tsx)
 // =============================================================================
 
-export type EnsembleRound = 1 | 2 | 3; // 1=hiddenBatchOutputs, 2=hiddenSynthesis, 3=finalEnsembled
-
-export interface EnsembleState {
-  isActive: boolean;
-  round: EnsembleRound; // 1,2,3
-  startTs: number | null;
-  abortId: string | null; // backend cancellation token (e.g., sessionId)
-  selectedModels: string[]; // models chosen in ModelTray for the ensemble (synth targets)
-  sourceModels: string[]; // models that produced the initial outputs used (for TurnActionBar)
-  hiddenBatchOutputs: {
-    [providerId: string]: {
-      text: string;
-      meta?: any;
-      contextSnapshot?: any; // chatId, conversationId, cursor etc.
-      ok: boolean;
-      error?: string;
-    };
-  };
-  hiddenSynthesisResults: {
-    [synthProviderId: string]: {
-      text: string;
-      meta?: any;
-      ok: boolean;
-      error?: string;
-    };
-  };
-  ensemblerProvider: string; // e.g. "claude"
-  ensemblerPromptPreview: string; // truncated preview
-}
-
-export const defaultEnsembleState: EnsembleState = {
-  isActive: false,
-  round: 1,
-  startTs: null,
-  abortId: null,
-  selectedModels: [],
-  sourceModels: [],
-  hiddenBatchOutputs: {},
-  hiddenSynthesisResults: {},
-  ensemblerProvider: 'claude',
-  ensemblerPromptPreview: ''
-};
+// Hidden/round-tracking types removed with hidden flows
 
 /** Migration utility - converts legacy Message to TurnMessage */
 export const convertLegacyMessageToTurn = (message: Message): TurnMessage => {

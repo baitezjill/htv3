@@ -183,14 +183,13 @@ class SessionManager {
       }
       if (!session.createdAt) session.createdAt = Date.now();
       session.lastActivity = Date.now();
-      this.saveSession(sessionId).catch(() => {});
     } catch (e) {}
     return roundId;
   }
 
   // Update a specific provider's result within a round
-  updateRoundProvider(sessionId, roundId, providerId, result, options = {}) {
-    const { skipSave = false } = options;
+  updateRoundProvider(sessionId, roundId, providerId, result, options = { skipSave: true }) {
+    const { skipSave = true } = options;
     const session = this.sessions[sessionId];
     if (!session || !Array.isArray(session.turns)) return;
     try {
@@ -202,17 +201,14 @@ class SessionManager {
         meta: result?.meta || {}
       };
       session.lastActivity = Date.now();
-      if (!skipSave) {
-        this.saveSession(sessionId).catch(console.error);
-      }
     } catch (e) {
       console.error(`[SessionManager] Error in updateRoundProvider:`, e);
     }
   }
 
   // Mark a round as completed
-  completeRound(sessionId, roundId, options = {}) {
-    const { skipSave = false } = options;
+  completeRound(sessionId, roundId, options = { skipSave: true }) {
+    const { skipSave = true } = options;
     const session = this.sessions[sessionId];
     if (!session || !Array.isArray(session.turns)) return;
     try {
@@ -220,9 +216,6 @@ class SessionManager {
       if (round) {
         round.completedAt = Date.now();
         session.lastActivity = Date.now();
-        if (!skipSave) {
-          this.saveSession(sessionId).catch(console.error);
-        }
       }
     } catch (e) {
       console.error(`[SessionManager] Error in completeRound:`, e);
@@ -306,8 +299,8 @@ class SessionManager {
     }
   }
   
-  async updateProviderContext(sessionId, providerId, result, preserveChat = true, options = {}) {
-    const { skipSave = false } = options;
+  async updateProviderContext(sessionId, providerId, result, preserveChat = true, options = { skipSave: true }) {
+    const { skipSave = true } = options;
     const logPrefix = `[SessionManager] [${providerId}]`;
     
     try {
@@ -973,93 +966,7 @@ chrome.runtime.onConnect.addListener((port) => {
         return;
       }
 
-      // Hidden Round 1: parallel fanout without visible streaming
-      if (message.type === "hiddenBatchExecute") {
-        try {
-          const { prompt, providers = [], sessionId } = message;
-          const availableProviders = (Array.isArray(providers) ? providers : []).filter((p) => providerRegistry.isAvailable(p));
-
-          const capturedSessionId = sessionId || `sid-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-          // Ensure session exists and broadcast session binding to UI early
-          try { sessionManager.getOrCreateSession(capturedSessionId, String(prompt || "")); } catch (_) {}
-          try { port.postMessage({ type: "session", sessionId: capturedSessionId }); } catch (_) {}
-
-          if (availableProviders.length === 0) {
-            try {
-              port.postMessage({
-                type: "HIDDEN_BATCH_COMPLETE",
-                sessionId: capturedSessionId,
-                payload: { successCount: 0, failCount: (Array.isArray(providers) ? providers.length : 0) }
-              });
-            } catch (_) {}
-            return;
-          }
-
-          // Execute non-blocking fanout. We suppress partial streaming; only emit per-provider completion.
-          await self.faultTolerantOrchestrator.executeParallelFanout(
-            String(prompt || ""),
-            availableProviders,
-            {
-              sessionId: capturedSessionId,
-              onPartial: (_providerId, _chunk) => {
-                // Intentionally no-op for hidden batch
-              },
-              onProviderComplete: (providerId, result) => {
-                // Merge continuation context and emit hidden result snapshot
-                try { 
-                  sessionManager.updateProviderContext(capturedSessionId, providerId, result, true, { skipSave: true }); 
-                } catch (_) {}
-                try {
-                  port.postMessage({
-                    type: "HIDDEN_BATCH_RESULT",
-                    sessionId: capturedSessionId,
-                    providerId,
-                    text: result?.text || "",
-                    ok: result?.ok !== false,
-                    meta: result?.meta || {}
-                  });
-                } catch (e) {
-                  console.warn('[HTOS] Failed to emit HIDDEN_BATCH_RESULT', e);
-                }
-              },
-              onError: (providerId, error) => {
-                try {
-                  port.postMessage({
-                    type: "HIDDEN_BATCH_RESULT",
-                    sessionId: capturedSessionId,
-                    providerId,
-                    text: "",
-                    ok: false,
-                    error: error?.message || "Provider error"
-                  });
-                } catch (e) {
-                  console.warn('[HTOS] Failed to emit HIDDEN_BATCH_RESULT (error)', e);
-                }
-              },
-              onAllComplete: (resultsMap, errorsMap) => {
-                try {
-                  const successCount = Array.from(resultsMap.values()).filter((r) => r && r.ok !== false).length;
-                  const errorCount = Array.from(errorsMap.values()).length;
-                  port.postMessage({
-                    type: "HIDDEN_BATCH_COMPLETE",
-                    sessionId: capturedSessionId,
-                    payload: { successCount, failCount: errorCount }
-                  });
-                } catch (e) {
-                  console.warn('[HTOS] Failed to emit HIDDEN_BATCH_COMPLETE', e);
-                }
-              }
-            }
-          );
-        } catch (e) {
-          console.error('[HTOS] hiddenBatchExecute handler failed', e);
-          try {
-            port.postMessage({ type: "HIDDEN_BATCH_COMPLETE", sessionId: message.sessionId || null, payload: { successCount: 0, failCount: (Array.isArray(message.providers) ? message.providers.length : 0) } });
-          } catch (_) {}
-        }
-        return;
-      }
+      // Hidden batch flow removed
 
       if (message.type === "sendPrompt") {
         const { prompt, providers, sessionId } = message;
@@ -1374,7 +1281,7 @@ chrome.runtime.onConnect.addListener((port) => {
       if (message.type === "synthesize") {
         try {
           let sessionId = message.sessionId || `wf-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-          const isHidden = message.hidden === true;
+          const isHidden = false; // hidden synthesis disabled
 
           // Normalize providers: support single provider (legacy) or array (batch)
           const singleProvider = (message.provider ? String(message.provider) : (message.synthesisProvider ? String(message.synthesisProvider) : "")).toLowerCase();
@@ -1473,7 +1380,7 @@ chrome.runtime.onConnect.addListener((port) => {
                 onPartial: (_pid, chunk) => {
                   try {
                     if (chunk && chunk.partial) {
-                      if (!isHidden) {
+                      if (true) {
                         const delta = makeDelta(sessionId, synthesisProvider, chunk.text || "");
                         if (delta) {
                           port.postMessage({
@@ -1484,8 +1391,6 @@ chrome.runtime.onConnect.addListener((port) => {
                             payload: { provider: synthesisProvider, text: delta },
                           });
                         }
-                      } else {
-                        // Suppress partials or emit hidden partials if needed later
                       }
                     }
                   } catch (e) {
@@ -1501,17 +1406,9 @@ chrome.runtime.onConnect.addListener((port) => {
               try { sessionManager.updateProviderContext(sessionId, synthesisProvider, { text: s?.text || "", meta: s?.meta || {} }, true, { skipSave: true }); } catch {}
 
               // Completion over the port (per provider)
-              if (!isHidden) {
+              if (true) {
                 port.postMessage({
                   type: "SYNTHESIS_COMPLETE",
-                  sessionId,
-                  provider: synthesisProvider,
-                  text: s?.text || "",
-                  payload: [{ provider: synthesisProvider, response: s?.text || "" }],
-                });
-              } else {
-                port.postMessage({
-                  type: "HIDDEN_SYNTHESIS_COMPLETE",
                   sessionId,
                   provider: synthesisProvider,
                   text: s?.text || "",
@@ -1522,19 +1419,11 @@ chrome.runtime.onConnect.addListener((port) => {
               synthOutcomes[synthesisProvider] = s?.ok !== false;
             } catch (err) {
               console.error("[HTOS] Synthesis error for provider", synthesisProvider, err);
-              if (!isHidden) {
+              if (true) {
                 port.postMessage({
                   type: "WORKFLOW_ERROR",
                   sessionId,
                   payload: { phase: "synthesis", provider: synthesisProvider, error: err?.message || "Synthesis failed" },
-                });
-              } else {
-                port.postMessage({
-                  type: "HIDDEN_SYNTHESIS_COMPLETE",
-                  sessionId,
-                  provider: synthesisProvider,
-                  text: "",
-                  error: err?.message || "Synthesis failed",
                 });
               }
               // Track failure outcome
@@ -1544,16 +1433,7 @@ chrome.runtime.onConnect.addListener((port) => {
 
           // Wait for all syntheses to settle (non-blocking for streaming, but we keep the try/catch scope)
           await Promise.allSettled(synthPromises);
-
-          // Emit aggregator for hidden flows so UI can advance to Round 3
-          if (isHidden) {
-            try {
-              const values = Object.values(synthOutcomes);
-              const successCount = values.filter((v) => v).length;
-              const failCount = values.length - successCount;
-              port.postMessage({ type: 'HIDDEN_SYNTHESIS_ALL_COMPLETE', sessionId, payload: { successCount, failCount } });
-            } catch {}
-          }
+          // Hidden synthesis aggregator removed
 
         } catch (error) {
           console.error("[HTOS] Port synthesis error:", error);
