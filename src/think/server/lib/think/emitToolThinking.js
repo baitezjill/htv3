@@ -1,5 +1,5 @@
-import { ndjsonSerialize } from '../../../src/lib/think/ndjson.js';
-import { O1_TOOL_NAME } from '../../../src/lib/think/constants.js';
+import { ndjsonSerialize } from '../../../lib/think/ndjson.js';
+import { O1_TOOL_NAME } from '../../../lib/think/constants.js';
 import crypto from 'crypto';
 
 // emits a single NDJSON line representing a Harpa-compatible tool message "🤔 Thinking..."

@@ -3,6 +3,7 @@ import { VariableSizeList as List, ListChildComponentProps } from 'react-window'
 import React from 'react';
 import { TurnMessage, UserTurn, AiTurn, ProviderResponse, AppStep, ChatSession, BackendMessage, LLMProvider, isUserTurn, isAiTurn, UiPhase, BackendFullSession } from './types';
 import { LLM_PROVIDERS_CONFIG, EXAMPLE_PROMPT } from './constants';
+import { computeThinkFlag } from '../src/think/lib/think/computeThinkFlag.js';
 import UserTurnBlock from './components/UserTurnBlock';
 import AiTurnBlock from './components/AiTurnBlock';
 import ChatInput from './components/ChatInput';
@@ -89,6 +90,10 @@ const App = () => {
   // Round-level action bar selections
   const [synthSelectionsByRound, setSynthSelectionsByRound] = useState<Record<string, Record<string, boolean>>>({});
   const [ensembleSelectionByRound, setEnsembleSelectionByRound] = useState<Record<string, string | null>>({});
+  // Think toggles
+  const [thinkOnChatGPT, setThinkOnChatGPT] = useState<boolean>(false);
+  const [thinkSynthByRound, setThinkSynthByRound] = useState<Record<string, boolean>>({});
+  const [thinkEnsembleByRound, setThinkEnsembleByRound] = useState<Record<string, boolean>>({});
 
   // Refs
   const activeAiTurnIdRef = useRef<string | null>(null);
@@ -488,7 +493,14 @@ const App = () => {
         setLastSynthesisModel(normalized[0]);
       }
       // fan-out supported by backend API; pass array when >1
-      await api.executeSynthesis(currentSessionId, originalPrompt, results, normalized.length === 1 ? normalized[0] : normalized, uiTabId, { idempotencyToken });
+      await api.executeSynthesis(
+        currentSessionId,
+        originalPrompt,
+        results,
+        normalized.length === 1 ? normalized[0] : normalized,
+        uiTabId,
+        { idempotencyToken, useThinking: !!thinkSynthByRound[userTurnId] && normalized.includes('chatgpt') }
+      );
     } catch (err) {
       console.error('Synthesis run failed:', err);
       setIsLoading(false);
@@ -497,7 +509,7 @@ const App = () => {
     } finally {
       isSynthRunningRef.current = false;
     }
-  }, [currentSessionId, synthSelectionsByRound, uiTabId, findRoundForUserTurn, findExistingSynthesisTurnForRound, findFirstInsertIndexBeforeAi]);
+  }, [currentSessionId, synthSelectionsByRound, uiTabId, findRoundForUserTurn, findExistingSynthesisTurnForRound, findFirstInsertIndexBeforeAi, thinkSynthByRound]);
 
   // Build the Ensembler prompt using provided fixed template from spec
   const buildEnsemblerPrompt = useCallback((userPrompt: string, modelOutputs: Record<string, string>): string => {
@@ -605,7 +617,8 @@ ${modelOutputsBlock}`;
         isVisibleMode,
         uiTabId,
         handlePortMessage,
-        currentSessionId
+        currentSessionId,
+        (ensemblerProvider === 'chatgpt') ? !!thinkEnsembleByRound[userTurnId] : undefined
       );
       lastAttachedPortRef.current = port;
     } catch (err) {
@@ -1060,13 +1073,18 @@ ${modelOutputsBlock}`;
       const handlePortMessage = createPortMessageHandler();
       handlePortMessageRef.current = handlePortMessage;
       
+      const useThinking = (selectedModels['chatgpt'] === true) && Boolean(
+        computeThinkFlag({ modeThinkButtonOn: thinkOnChatGPT, input: prompt })
+      );
+
       const { sessionId, port } = api.executeBatchPrompt(
         prompt,
         activeProviders,
         isVisibleMode,
         uiTabId,
         handlePortMessage,
-        currentSessionId || undefined
+        currentSessionId || undefined,
+        useThinking
       );
       
       setCurrentSessionId(sessionId);
@@ -1092,7 +1110,7 @@ ${modelOutputsBlock}`;
         return newMap;
       });
     }
-  }, [selectedModels, showWelcome, currentSessionId, isVisibleMode, uiTabId, createPortMessageHandler]);
+  }, [selectedModels, showWelcome, currentSessionId, isVisibleMode, uiTabId, createPortMessageHandler, thinkOnChatGPT]);
 
   const handleContinuation = useCallback(async (prompt: string) => {
     const trimmed = prompt.trim();
@@ -1149,12 +1167,17 @@ ${modelOutputsBlock}`;
         lastAttachedPortRef.current = port;
       }
       
+      const useThinking = (selectedModels['chatgpt'] === true) && Boolean(
+        computeThinkFlag({ modeThinkButtonOn: thinkOnChatGPT, input: trimmed })
+      );
+
       await api.executeContinuationPrompt({
         prompt: trimmed,
         providers: providerIds,
         sessionId: currentSessionId,
         providerContexts,
-        uiTabId
+        uiTabId,
+        options: { useThinking }
       });
     } catch (e) {
       console.error('Continuation failed:', e);
@@ -1382,7 +1405,11 @@ ${modelOutputsBlock}`;
               eligibleMap={synthMap}
               ensembleEligibleMap={ensembleMap}
               disableSynthesisRun={disableSynthesisRun}
-              disableEnsembleRun={disableEnsembleRun}
+            disableEnsembleRun={disableEnsembleRun}
+            thinkSynthForChatGPT={!!thinkSynthByRound[turn.id]}
+            onToggleThinkSynthForChatGPT={(rid) => setThinkSynthByRound(prev => ({ ...prev, [rid]: !prev[rid] }))}
+            thinkEnsembleForChatGPT={!!thinkEnsembleByRound[turn.id]}
+            onToggleThinkEnsembleForChatGPT={(rid) => setThinkEnsembleByRound(prev => ({ ...prev, [rid]: !prev[rid] }))}
             />
           </div>
         </div>
@@ -1575,6 +1602,8 @@ ${modelOutputsBlock}`;
           selectedModels={selectedModels}
           onToggleModel={handleToggleModel}
           isLoading={isLoading}
+          thinkOnChatGPT={thinkOnChatGPT}
+          onToggleThinkChatGPT={() => setThinkOnChatGPT(prev => !prev)}
         />
 
         <ChatInput
