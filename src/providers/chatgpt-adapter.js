@@ -5,8 +5,6 @@
  * Build-phase safe: emitted to dist/adapters/*
  */
 import { classifyProviderError } from "../core/request-lifecycle-manager.js";
-import { thinkAsk } from "../think/lib/think/thinkAsk.js";
-import { O1_TOOL_NAME } from "../think/lib/think/constants.js";
 
 export class ChatGPTAdapter {
   constructor(controller) {
@@ -83,73 +81,41 @@ export class ChatGPTAdapter {
           }
         };
 
-        // Use thinkAsk to POST to /ai/ask and stream NDJSON events
-        await new Promise((resolve, reject) => {
-          try {
-            thinkAsk({ url: '/ai/ask', messages: [{ role: 'user', content: req.originalPrompt }], stream: true, think: true }, (parsed) => {
-              try {
-                // Map parsed NDJSON events into adapter chunk shape
-                if (!parsed) return;
-                if (parsed.type === 'message' && parsed.message) {
-                  const author = parsed.message.author || {};
-                  const contents = Array.isArray(parsed.message.content) ? parsed.message.content : [];
-                  const text = contents.map(c => c.text || '').join('');
+        // Route think-mode through the authenticated ChatGPT session API to reuse cookies/tokens
+        try {
+          const result = await this.controller.chatgptSession.ask(
+            req.originalPrompt,
+            {
+              signal,
+              model: req.meta?.model,
+              // Preserve continuation identifiers where available
+              chatId: req.meta?.conversationId,
+              parentMessageId: req.meta?.parentMessageId || req.meta?.messageId,
+              think: true,
+            },
+            forwardOnChunk
+          );
 
-                  if (author.role === 'tool' && author.name === O1_TOOL_NAME) {
-                    const chunk = { partial: true, text: text || '🤔 Thinking...', meta: { thinking: true } };
-                    aggregated += (text || '');
-                    forwardOnChunk(chunk);
-                    return;
-                  }
-
-                  if (author.role === 'assistant' || author.role === 'system' || author.role === 'user') {
-                    const chunk = { partial: true, text: text || '' };
-                    aggregated += (text || '');
-                    forwardOnChunk(chunk);
-                    return;
-                  }
-                } else if (parsed.type === 'done') {
-                  // final done event
-                  resolve(parsed.result || {});
-                  return;
-                } else {
-                  // unknown envelope: forward raw
-                  try { forwardOnChunk({ partial: true, text: JSON.stringify(parsed) }); } catch(_) {}
-                }
-              } catch (e) {
-                // swallow per-chunk errors but log
-                console.warn('[ChatGPT Adapter] thinkAsk chunk handling failed', e);
-              }
-            }, () => {
-              // onDone called after stream end; resolve with aggregated
-              resolve({ text: aggregated });
-            }, signal).catch(err => reject(err));
-          } catch (e) { reject(e); }
-        }).then((finalRes) => {
           const response = {
             providerId: this.id,
             ok: true,
             id: null,
-            text: finalRes?.text ?? "",
+            text: result?.text ?? aggregated ?? "",
             partial: false,
             latencyMs: Date.now() - startTime,
             meta: {
-              model: observedModel || req.meta?.model || 'auto',
+              model: result?.model || observedModel || 'auto',
               conversationId: conversationId || undefined,
               messageId: lastMessageId || undefined,
-              parentMessageId: lastMessageId || undefined
-            }
+              parentMessageId: lastMessageId || undefined,
+            },
           };
-          console.log(`[ChatGPT Adapter] providerComplete (thinking): chatgpt status=success, latencyMs=${response.latencyMs}, textLen=${response.text.length}`);
+          console.log(`[ChatGPT Adapter] providerComplete (thinking via session): chatgpt status=success, latencyMs=${response.latencyMs}, textLen=${response.text.length}`);
           return response;
-        }).then(res => {
-          // resolved response; return it from function by throwing into outer try/catch? We'll store and return after
-          // But since we are inside try/catch, just assign and return below
-          throw { __chatgpt_adapter_thinking_result: res };
-        }).catch(err => {
-          if (err && err.__chatgpt_adapter_thinking_result) throw err; // bubble up to be handled below
-          throw err;
-        });
+        } catch (e) {
+          console.warn('[ChatGPT Adapter] think-mode via session failed, falling back to non-think ask()', e);
+          // fall through to normal non-thinking flow below
+        }
       }
 
       // Original non-thinking flow delegates to controller.chatgptSession.ask

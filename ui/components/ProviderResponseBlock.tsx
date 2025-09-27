@@ -65,16 +65,25 @@ const ProviderResponseBlock = ({
   currentAppStep,
   isReducedMotion = false
 }: ProviderResponseBlockProps) => {
-  // Convert providerResponses to legacy format if provided, otherwise use providerStates
-  const effectiveProviderStates = providerResponses 
-    ? Object.entries(providerResponses).reduce((acc, [providerId, response]) => {
-        acc[providerId] = {
-          text: response.text,
-          status: response.status,
-        };
-        return acc;
-      }, {} as ProviderStates)
-    : (providerStates || {});
+  // Keep both shapes: full responses (including meta) when available, and a legacy states map
+  const effectiveProviderResponses = providerResponses 
+    ? { ...providerResponses }
+    : // Normalize legacy providerStates into a minimal ProviderResponse-like shape
+    Object.fromEntries(
+      Object.entries(providerStates || {}).map(([id, s]) => [
+        id,
+        { text: s.text, status: s.status, meta: undefined },
+      ])
+    );
+
+  const effectiveProviderStates = Object.entries(effectiveProviderResponses).reduce((acc, [providerId, response]) => {
+    acc[providerId] = {
+      text: (response as any).text,
+      status: (response as any).status,
+    };
+    return acc;
+  }, {} as ProviderStates);
+
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
   const [blockMinHeight, setBlockMinHeight] = useState<string>('calc(100vh / 6)');
 
@@ -368,6 +377,20 @@ const ProviderResponseBlock = ({
                       {isStreaming && <span className="streaming-dots" />}
                     </div>
                   )}
+                  {/* Model footer: show model and optional fallback indicator, right-aligned and muted */}
+                  {(() => {
+                    const resp = effectiveProviderResponses[providerId as string] as any;
+                    const modelUsed = resp?.meta?.model;
+                    const fallback = resp?.meta?.fallback;
+                    if (modelUsed) {
+                      return (
+                        <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '6px', textAlign: 'right' }}>
+                          {`Model: ${modelUsed}${fallback ? ' (fallback)' : ''}`}
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                   
                   {/* Provider Pill positioned at bottom right */}
                   <div style={{ marginTop: 'auto', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>

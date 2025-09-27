@@ -1132,7 +1132,7 @@ chrome.runtime.onConnect.addListener((port) => {
        }
 
       if (message.type === "continue") {
-        const { prompt, providers, sessionId, providerContexts } = message;
+        const { prompt, providers, sessionId, providerContexts, useThinking } = message;
         console.log(`[HTOS] Processing continuation for session ${sessionId} with ${providers.length} providers`);
 
         // Validate providers
@@ -1168,6 +1168,13 @@ chrome.runtime.onConnect.addListener((port) => {
               ...storedContexts[providerId]?.meta
             }
           };
+          // Thread useThinking into meta (session-level preference for this continuation)
+          try {
+            mergedContexts[providerId].meta = {
+              ...(mergedContexts[providerId].meta || {}),
+              useThinking: Boolean(useThinking)
+            };
+          } catch {}
         }
         
         console.log("[HTOS] Merged provider contexts for continuation:", mergedContexts);
@@ -1303,6 +1310,7 @@ chrome.runtime.onConnect.addListener((port) => {
         try {
           let sessionId = message.sessionId || `wf-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
           const isHidden = false; // hidden synthesis disabled
+          const useThinking = Boolean(message.useThinking);
 
           // Normalize providers: support single provider (legacy) or array (batch)
           const singleProvider = (message.provider ? String(message.provider) : (message.synthesisProvider ? String(message.synthesisProvider) : "")).toLowerCase();
@@ -1389,6 +1397,10 @@ chrome.runtime.onConnect.addListener((port) => {
                 meta.parentMessageId = synthMeta.parentMessageId;
                 meta.messageId = synthMeta.messageId;
               }
+              // Honor Think-mode for ChatGPT synthesis
+              if (synthesisProvider === 'chatgpt' && useThinking) {
+                meta.useThinking = true;
+              }
 
               // Execute synthesis for this provider
               const res = await self.orchestrator.batchPrompt(originalPrompt, {
@@ -1471,7 +1483,7 @@ chrome.runtime.onConnect.addListener((port) => {
       // FINAL ENSEMBLING (Round 3) — stream a single visible answer from chosen provider
       if (message.type === 'ensemble_finalize') {
         try {
-          const { sessionId, userPrompt, modelOutputs, ensemblerProvider, ensemblerPrompt } = message;
+          const { sessionId, userPrompt, modelOutputs, ensemblerProvider, ensemblerPrompt, useThinking } = message;
           const providerId = String(ensemblerProvider || 'claude').toLowerCase();
           const adapter = providerRegistry.getAdapter(providerId);
           if (!adapter) {
@@ -1488,6 +1500,7 @@ chrome.runtime.onConnect.addListener((port) => {
               ensemble: true,
               userPrompt,
               modelOutputs,
+              ...(providerId === 'chatgpt' ? { useThinking: Boolean(useThinking) } : {})
             },
           };
 
@@ -1576,7 +1589,17 @@ async function initializeGlobalInfrastructure() {
   try {
     if (chrome.alarms) {
       
-      console.log("[HTOS] ✓ NetRulesManager initialized");
+      // Ensure NetRulesManager is properly initialized before calling register
+      if (typeof NetRulesManager !== 'undefined' && typeof NetRulesManager.init === 'function') {
+        try {
+          await NetRulesManager.init();
+          console.log("[HTOS] ✓ NetRulesManager initialized");
+        } catch (initErr) {
+          console.error('[HTOS] NetRulesManager.init() failed', initErr);
+        }
+      } else {
+        console.warn('[HTOS] NetRulesManager not available or missing init()');
+      }
       
       CSPController.init();
       console.log("[HTOS] ✓ CSPController initialized");
@@ -2473,21 +2496,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  // Handle lifecycle/liveness messages emitted by SW/orchestrator to avoid noisy logs
+  if (reqType === 'htos.keepalive' || reqType === '__htos_keepalive' || reqType === 'workflow.start' || reqType === 'workflow.end') {
+    try {
+      // Optionally record a lightweight heartbeat metric
+      try { healthMonitor?.recordRequest?.('keepalive'); } catch (e) {}
+      // Acknowledge silently so callers don't see Unknown-type warnings
+      if (typeof sendResponse === 'function') sendResponse({ success: true });
+    } catch (e) {}
+    return true;
+  }
+
   // Graceful degradation for unknown message types
   console.warn("[HTOS] Unknown message type:", request.type);
   sendResponse({ 
-    success: false, 
-    error: "Unknown message type",
-    type: request.type,
-    supportedTypes: Object.keys(historyResponses).concat([
-      'EXECUTE_WORKFLOW', 
-      'CHATGPT_*', 
-      'GET_CHATGPT_ACCESS_TOKEN',
-      'bypassCSP'
-    ])
-  });
-  return true;
+     success: false, 
+     error: "Unknown message type",
+     type: request.type,
+    supportedTypes: Object.keys(typeof historyResponses !== 'undefined' && historyResponses ? historyResponses : {}).concat([
+       'EXECUTE_WORKFLOW', 
+       'CHATGPT_*', 
+       'GET_CHATGPT_ACCESS_TOKEN',
+       'bypassCSP'
+     ])
+   });
+   return true;
 });
+
 
 // =============================================================================
 // SYSTEM HEALTH MONITORING

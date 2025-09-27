@@ -430,11 +430,14 @@ export class ChatGPTSessionApi {
     const requirements = await this._fetchRequirements(reqProof);
 
     // 3) Build ask payload
+    // If think-mode requested, force the thinking-capable model slug used by webchat.
+    const selectedModel = options?.think === true ? 'gpt-5-t-mini' : model;
     const body = this._buildAskBody(prompt, {
-      model,
+      model: selectedModel,
       chatId,
       parentMessageId,
       attachments,
+      think: options?.think === true,
     });
 
     // 4) Headers baseline
@@ -520,7 +523,7 @@ export class ChatGPTSessionApi {
                   text: aggText,
                   chatId: conversationId,
                   finishDetails,
-                  model,
+                  model: selectedModel,
                   partial: true,
                 });
               }
@@ -540,7 +543,7 @@ export class ChatGPTSessionApi {
           reader.releaseLock();
         } catch {}
       }
-      return { text: aggText, model };
+      return { text: aggText, model: selectedModel };
     }
 
     // If server responds JSON (WSS bootstrap), we don't support WSS here.
@@ -1049,7 +1052,7 @@ export class ChatGPTSessionApi {
     return headers;
   }
 
-  _buildAskBody(prompt, { model, chatId, parentMessageId, attachments }) {
+  _buildAskBody(prompt, { model, chatId, parentMessageId, attachments, think = false }) {
     const msgId =
       utils?.id?.uuid?.() ||
       crypto?.randomUUID?.() ||
@@ -1070,7 +1073,7 @@ export class ChatGPTSessionApi {
         content_type: attachments?.length ? "multimodal_text" : "text",
         parts: attachments?.length ? [prompt] : [prompt],
       },
-      metadata: {},
+      metadata: think ? { htos_think: true } : {},
     };
     return {
       action: "next",

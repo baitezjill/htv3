@@ -54,9 +54,14 @@ interface UserTurnBlockProps {
   ensembleEligibleMap?: Record<string, { disabled: boolean; reason?: string }>;
   disableSynthesisRun?: boolean;
   disableEnsembleRun?: boolean;
+  // Think-mode toggles specific to ChatGPT within this round
+  thinkSynthForChatGPT?: boolean;
+  onToggleThinkSynthForChatGPT?: (roundUserTurnId: string) => void;
+  thinkEnsembleForChatGPT?: boolean;
+  onToggleThinkEnsembleForChatGPT?: (roundUserTurnId: string) => void;
 }
 
-const UserTurnBlock = ({ userTurn, isExpanded, onToggle, synthSelected = {}, onToggleSynth, onRunSynthesis, ensembleSelected = null, onSelectEnsemble, onRunEnsemble, eligibleMap = {}, ensembleEligibleMap = {}, disableSynthesisRun = false, disableEnsembleRun = false }: UserTurnBlockProps) => {
+const UserTurnBlock = ({ userTurn, isExpanded, onToggle, synthSelected = {}, onToggleSynth, onRunSynthesis, ensembleSelected = null, onSelectEnsemble, onRunEnsemble, eligibleMap = {}, ensembleEligibleMap = {}, disableSynthesisRun = false, disableEnsembleRun = false, thinkSynthForChatGPT = false, onToggleThinkSynthForChatGPT, thinkEnsembleForChatGPT = false, onToggleThinkEnsembleForChatGPT }: UserTurnBlockProps) => {
   const date = new Date(userTurn.createdAt);
   const readableTimestamp = date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
   const isoTimestamp = date.toISOString();
@@ -173,6 +178,10 @@ const UserTurnBlock = ({ userTurn, isExpanded, onToggle, synthSelected = {}, onT
             ensembleEligibleMap={ensembleEligibleMap}
             disableSynthesisRun={disableSynthesisRun}
             disableEnsembleRun={disableEnsembleRun}
+            thinkSynthForChatGPT={thinkSynthForChatGPT}
+            onToggleThinkSynthForChatGPT={() => onToggleThinkSynthForChatGPT?.(userTurn.id)}
+            thinkEnsembleForChatGPT={thinkEnsembleForChatGPT}
+            onToggleThinkEnsembleForChatGPT={() => onToggleThinkEnsembleForChatGPT?.(userTurn.id)}
           />
         </div>
       </div>
