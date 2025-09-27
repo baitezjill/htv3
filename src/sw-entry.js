@@ -780,8 +780,10 @@ class FaultTolerantOrchestrator {
     const { onPartial, onComplete, onError } = callbacks;
     
     try {
-      console.log(`[FaultTolerantOrchestrator] Starting provider: ${providerId}`);
-      
+      console.log(
+        `[FaultTolerantOrchestrator] Starting provider: ${providerId}`
+      );
+
       const adapter = providerRegistry.getAdapter(providerId);
       if (!adapter) {
         throw new Error(`Provider ${providerId} not available`);
@@ -789,20 +791,24 @@ class FaultTolerantOrchestrator {
 
       // Include any persisted continuation context for this provider/session so
       // hidden batch executions can continue existing conversations.
-      const providerContext = ((sessionManager && typeof sessionManager.getProviderContexts === 'function')
-        ? (sessionManager.getProviderContexts(sessionId)?.[providerId] || {})
-        : {});
+      const providerContext =
+        sessionManager &&
+        typeof sessionManager.getProviderContexts === "function"
+          ? sessionManager.getProviderContexts(sessionId)?.[providerId] || {}
+          : {};
 
-      // Resolve final useThinking flag: provider-specific meta > active request opt > session-level
+      // Resolve final useThinking flag: provider-specific meta > active request opt
       let resolvedUseThinking = false;
       try {
-        const session = sessionManager.getOrCreateSession(sessionId);
         const active = this.activeRequests.get(sessionId) || {};
-        resolvedUseThinking = (providerContext?.meta?.useThinking !== undefined)
-          ? Boolean(providerContext.meta.useThinking)
-          : (active.useThinking !== undefined ? Boolean(active.useThinking) : Boolean(session?.useThinking));
+        resolvedUseThinking =
+          providerContext?.meta?.useThinking !== undefined
+            ? Boolean(providerContext.meta.useThinking)
+            : active.useThinking !== undefined
+            ? Boolean(active.useThinking)
+            : false;
       } catch (e) {
-        resolvedUseThinking = !!(providerContext?.meta?.useThinking);
+        resolvedUseThinking = !!providerContext?.meta?.useThinking;
       }
 
       const request = {
@@ -810,8 +816,8 @@ class FaultTolerantOrchestrator {
         sessionId,
         meta: {
           ...(providerContext?.meta || providerContext || {}),
-          useThinking: resolvedUseThinking
-        }
+          useThinking: resolvedUseThinking,
+        },
       };
 
       // Execute with fault isolation
@@ -825,10 +831,11 @@ class FaultTolerantOrchestrator {
       );
 
       if (signal.aborted) return;
-      
-      console.log(`[FaultTolerantOrchestrator] Provider ${providerId} completed successfully`);
+
+      console.log(
+        `[FaultTolerantOrchestrator] Provider ${providerId} completed successfully`
+      );
       onComplete(result);
-      
     } catch (error) {
       if (signal.aborted) return;
       
@@ -1024,9 +1031,6 @@ chrome.runtime.onConnect.addListener((port) => {
         // Ensure session state exists before starting the fanout so callbacks
         // can immediately merge contexts and logs have a target session.
         try {
-          const session = sessionManager.getOrCreateSession(capturedSessionId);
-          // Persist the useThinking preference on the session so continuations can honor it
-          try { session.useThinking = Boolean(useThinking); } catch(_) {}
         } catch (e) {
           console.warn('[HTOS] Failed to create session before fanout', e);
         }
@@ -1369,36 +1373,65 @@ chrome.runtime.onConnect.addListener((port) => {
                 const merged = { ...allBatchResults };
                 try {
                   Object.entries(providerContexts).forEach(([pid, ctx]) => {
-                    if (merged[pid] == null && ctx && typeof ctx.text === 'string' && ctx.text.length > 0) {
+                    if (
+                      merged[pid] == null &&
+                      ctx &&
+                      typeof ctx.text === "string" &&
+                      ctx.text.length > 0
+                    ) {
                       merged[pid] = ctx.text;
                     }
                   });
                 } catch {}
                 otherResults = Object.entries(merged)
                   .filter(([pid]) => pid !== synthesisProvider)
-                  .map(([pid, text]) => ({ providerId: pid, text: text || "" }));
-                try { console.log('[HTOS] Using allBatchResults for synthesis', { synthesisProvider, count: otherResults.length }); } catch {}
+                  .map(([pid, text]) => ({
+                    providerId: pid,
+                    text: text || "",
+                  }));
+                try {
+                  console.log("[HTOS] Using allBatchResults for synthesis", {
+                    synthesisProvider,
+                    count: otherResults.length,
+                  });
+                } catch {}
               } else {
                 otherResults = Object.entries(providerContexts)
                   .filter(([pid]) => pid !== synthesisProvider)
-                  .map(([pid, ctx]) => ({ providerId: pid, text: ctx?.text || "" }));
-                try { console.log('[HTOS] Using provider contexts for synthesis (fallback)', { synthesisProvider, count: otherResults.length }); } catch {}
+                  .map(([pid, ctx]) => ({
+                    providerId: pid,
+                    text: ctx?.text || "",
+                  }));
+                try {
+                  console.log(
+                    "[HTOS] Using provider contexts for synthesis (fallback)",
+                    { synthesisProvider, count: otherResults.length }
+                  );
+                } catch {}
               }
 
               // Provider-specific meta (preserve continuation)
               const meta = {};
               const synthMeta = providerContexts[synthesisProvider]?.meta || {};
-              if (synthesisProvider === "claude" && (synthMeta.chatId || synthMeta.threadUrl)) {
+              if (
+                synthesisProvider === "claude" &&
+                (synthMeta.chatId || synthMeta.threadUrl)
+              ) {
                 meta.chatId = synthMeta.chatId || synthMeta.threadUrl;
               } else if (synthesisProvider === "gemini" && synthMeta.cursor) {
                 meta.cursor = synthMeta.cursor;
-              } else if (synthesisProvider === "chatgpt" && (synthMeta.conversationId || synthMeta.parentMessageId || synthMeta.messageId)) {
+              } else if (
+                synthesisProvider === "chatgpt" &&
+                (synthMeta.conversationId ||
+                  synthMeta.parentMessageId ||
+                  synthMeta.messageId)
+              ) {
                 meta.conversationId = synthMeta.conversationId;
                 meta.parentMessageId = synthMeta.parentMessageId;
                 meta.messageId = synthMeta.messageId;
               }
               // Honor Think-mode for ChatGPT synthesis
-              if (synthesisProvider === 'chatgpt' && useThinking) {
+              if (synthesisProvider === "chatgpt" && useThinking) {
                 meta.useThinking = true;
               }
 
@@ -1413,41 +1446,54 @@ chrome.runtime.onConnect.addListener((port) => {
                 onPartial: (_pid, chunk) => {
                   try {
                     if (chunk && chunk.partial) {
-                      if (true) {
-                        const delta = makeDelta(sessionId, synthesisProvider, chunk.text || "");
-                        if (delta) {
-                          port.postMessage({
-                            type: "SYNTHESIS_PARTIAL",
-                            sessionId,
-                            provider: synthesisProvider,
-                            text: delta,
-                            payload: { provider: synthesisProvider, text: delta },
-                          });
-                        }
+                      const delta = makeDelta(
+                        sessionId,
+                        synthesisProvider,
+                        chunk.text || ""
+                      );
+                      if (delta) {
+                        port.postMessage({
+                          type: "SYNTHESIS_PARTIAL",
+                          sessionId,
+                          payload: { provider: synthesisProvider, text: delta },
+                        });
                       }
                     }
                   } catch (e) {
-                    console.warn("[HTOS] Failed to stream synthesis partial over port", e);
+                    console.warn(
+                      "[HTOS] Failed to stream synthesis partial over port",
+                      e
+                    );
                   }
                 },
               });
 
               const s = res?.synthesis || null;
-              try { console.log('[HTOS] Synthesis result meta', { sessionId, synthesisProvider, meta: s?.meta }); } catch {}
+              try {
+                console.log("[HTOS] Synthesis result meta", {
+                  sessionId,
+                  synthesisProvider,
+                  meta: s?.meta,
+                });
+              } catch {}
 
               // Persist provider context for potential continuation or subsequent synthesis
-              try { sessionManager.updateProviderContext(sessionId, synthesisProvider, { text: s?.text || "", meta: s?.meta || {} }, true, { skipSave: true }); } catch {}
+              sessionManager.updateProviderContext(
+                sessionId,
+                synthesisProvider,
+                { text: s?.text || "", meta: s?.meta || {} },
+                true,
+                { skipSave: true }
+              );
 
               // Completion over the port (per provider)
-              if (true) {
-                port.postMessage({
-                  type: "SYNTHESIS_COMPLETE",
-                  sessionId,
-                  provider: synthesisProvider,
-                  text: s?.text || "",
-                  payload: [{ provider: synthesisProvider, response: s?.text || "" }],
-                });
-              }
+              port.postMessage({
+                type: "SYNTHESIS_COMPLETE",
+                sessionId,
+                payload: [
+                  { provider: synthesisProvider, response: s?.text || "" },
+                ],
+              });
               // Track outcome
               synthOutcomes[synthesisProvider] = s?.ok !== false;
             } catch (err) {
@@ -1951,36 +1997,53 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               onPartial: (_pid, chunk) => {
                 try {
                   if (chunk && chunk.partial) {
-                    if (true) {
-                      const delta = makeDelta(sessionId, synthesisProvider, chunk.text || "");
-                      if (delta) {
-                        port.postMessage({
-                          type: "SYNTHESIS_PARTIAL",
-                          sessionId,
-                          provider: synthesisProvider,
-                          text: delta,
-                          payload: { provider: synthesisProvider, text: delta },
-                        });
-                      }
+                    const delta = makeDelta(
+                      sessionId,
+                      synthesisProvider,
+                      chunk.text || ""
+                    );
+                    if (delta) {
+                      port.postMessage({
+                        type: "SYNTHESIS_PARTIAL",
+                        sessionId,
+                        payload: { provider: synthesisProvider, text: delta },
+                      });
                     }
                   }
                 } catch (e) {
-                  console.warn("[HTOS] Failed to stream synthesis partial over port", e);
+                  console.warn(
+                    "[HTOS] Failed to stream synthesis partial over port",
+                    e
+                  );
                 }
               },
             });
 
             const s = res?.synthesis || null;
-            try { console.log('[HTOS] Synthesis result meta', { sessionId, synthesisProvider, meta: s?.meta }); } catch {}
+            try {
+              console.log("[HTOS] Synthesis result meta", {
+                sessionId,
+                synthesisProvider,
+                meta: s?.meta,
+              });
+            } catch {}
 
             // Persist provider context for potential continuation or subsequent synthesis
-            try { sessionManager.updateProviderContext(sessionId, synthesisProvider, { text: s?.text || "", meta: s?.meta || {} }, true, { skipSave: true }); } catch {}
+            sessionManager.updateProviderContext(
+              sessionId,
+              synthesisProvider,
+              { text: s?.text || "", meta: s?.meta || {} },
+              true,
+              { skipSave: true }
+            );
 
             // Final synthesis completion over the port
             chrome.runtime.sendMessage({
               type: "SYNTHESIS_COMPLETE",
               sessionId,
-              payload: [{ provider: synthesisProvider, response: s?.text || "" }],
+              payload: [
+                { provider: synthesisProvider, response: s?.text || "" },
+              ],
             });
           } catch (error) {
             console.error("[HTOS] Synthesis error:", error);
